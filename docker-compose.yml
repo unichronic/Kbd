@@ -20,6 +20,20 @@ services:
       - "8000:8000"
     volumes:
       - ~/.docker-conf/chromadb/data/:/chroma/chroma
+
+  actor_agent:
+    build: .
+    container_name: actor_agent
+    ports:
+      - "8003:8003"
+    depends_on:
+      - rabbitmq
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+    restart: on-failure
+    env_file:
+      - .env
+
     environment:
       - CHROMA_SERVER_HOST=0.0.0.0
       - CHROMA_SERVER_HTTP_PORT=8000
