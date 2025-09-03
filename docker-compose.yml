@@ -30,13 +30,11 @@ services:
       - rabbitmq
     environment:
       - RABBITMQ_HOST=rabbitmq
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
     restart: on-failure
     env_file:
       - .env
-
-    environment:
-      - CHROMA_SERVER_HOST=0.0.0.0
-      - CHROMA_SERVER_HTTP_PORT=8000
 
   # API Gateway
   api-gateway:
