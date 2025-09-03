@@ -4,6 +4,8 @@ import httpx
 import asyncio
 from typing import Dict, Any, List
 import uvicorn
+import pika
+import json
 
 app = FastAPI(
     title="KubeMinder API Gateway",
@@ -126,6 +128,52 @@ async def get_agents():
             }
         ]
     }
+
+RABBITMQ_URL = "amqp://guest:guest@localhost:5672/"
+
+@app.post("/api/plans/forward-to-approved")
+async def forward_plans_to_approved():
+    try:
+        connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
+        channel = connection.channel()
+
+        forwarded_count = 0
+        while True:
+            method, properties, body = channel.basic_get(queue="q.plans.proposed", auto_ack=False)
+            if not method:
+                break
+
+            try:
+                plan = json.loads(body)
+            except Exception as e:
+                channel.basic_ack(delivery_tag=method.delivery_tag)
+                print("❌ Failed to decode plan:", body, e)
+                continue
+
+            plan["status"] = "approved"
+            plan["approved_by"] = "gateway"
+
+            # ✅ Properly aligned with plan update
+            channel.basic_publish(
+                exchange="",   # default direct exchange
+                routing_key="q.plans.approved",  # forward directly to the approved queue
+                body=json.dumps(plan),
+                properties=pika.BasicProperties(
+                    content_type="application/json",
+                    delivery_mode=2
+                )
+            )
+
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            forwarded_count += 1
+
+        connection.close()
+        return {"status": "success", "forwarded_count": forwarded_count}
+
+    except Exception as e:
+        print("🔥 Forwarding error:", e)
+        raise HTTPException(status_code=500, detail=f"Failed to forward plans: {str(e)}")
+
 
 if __name__ == "__main__":
     print("🚀 Starting KubeMinder API Gateway on port 8005...")
