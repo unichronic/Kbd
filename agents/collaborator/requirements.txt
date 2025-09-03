@@ -1,4 +1,8 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pika==1.3.2
-websockets==12.0
+
+fastapi
+uvicorn
+kubernetes
+slack_sdk
+pymongo
+dotenv
+python-multipart
