@@ -1,0 +1,19 @@
+﻿{
+  "id": "inc-demo-001",
+  "title": "Synthetic spike",
+  "affected_service": "orders-api",
+  "hypothesis": "DB saturation suspected",
+  "symptoms": ["5xx spike", "latency p95 degraded"],
+  "metrics": {"error_rate": 0.11, "latency_p95_ms": 840, "cpu_usage": 78.0, "memory_usage": 72.0, "request_rate_rps": 450},
+  "loki_logs": [
+    {"timestamp": "2025-09-03T10:00:00Z", "level": "error", "message": "db timeout on SELECT order", "pod": "orders-7d9f5c", "container": "orders", "namespace": "prod"},
+    {"timestamp": "2025-09-03T10:00:05Z", "level": "warn", "message": "retry attempt 1 for /checkout", "pod": "orders-7d9f5c", "container": "orders", "namespace": "prod"},
+    {"timestamp": "2025-09-03T10:00:08Z", "level": "error", "message": "connection reset by peer", "pod": "orders-7d9f5c", "container": "orders", "namespace": "prod"}
+  ],
+  "k8s_events": [
+    {"type": "Warning", "reason": "BackOff", "message": "Back-off restarting failed container orders", "timestamp": "2025-09-03T10:00:10Z"}
+  ],
+  "git_commits": [
+    {"sha": "abc123", "message": "increase db pool size to 40", "author": "devA", "timestamp": "2025-09-03T09:00:00Z", "files_changed": 2}
+  ]
+}
