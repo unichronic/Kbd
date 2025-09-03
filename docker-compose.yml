@@ -30,10 +30,61 @@ services:
       - rabbitmq
     environment:
       - RABBITMQ_HOST=rabbitmq
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
     restart: on-failure
     env_file:
       - .env
 
+  # API Gateway
+  api-gateway:
+    build: ./backend/api_gateway
+    container_name: api-gateway
+    ports:
+      - "8005:8005"
+    depends_on:
+      - rabbitmq
     environment:
-      - CHROMA_SERVER_HOST=0.0.0.0
-      - CHROMA_SERVER_HTTP_PORT=8000
+      - PLANNER_URL=http://planner:8001
+      - COLLABORATOR_URL=http://collaborator:8002
+      - ACTOR_URL=http://actor:8003
+      - LEARNER_URL=http://learner:8004
+    restart: unless-stopped
+
+  # KubeMinder Agents
+  planner:
+    build: ./agents/planner
+    container_name: planner
+    ports:
+      - "8001:8001"
+    depends_on:
+      - rabbitmq
+    restart: unless-stopped
+
+  collaborator:
+    build: ./agents/collaborator
+    container_name: collaborator
+    ports:
+      - "8002:8002"
+    depends_on:
+      - rabbitmq
+    restart: unless-stopped
+
+  actor:
+    build: ./agents/actor
+    container_name: actor
+    ports:
+      - "8003:8003"
+    depends_on:
+      - rabbitmq
+    restart: unless-stopped
+
+  learner:
+    build: ./agents/learner
+    container_name: learner
+    ports:
+      - "8004:8004"
+    depends_on:
+      - rabbitmq
+      - chromadb
+    restart: unless-stopped

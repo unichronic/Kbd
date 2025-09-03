@@ -12,7 +12,15 @@
     "build": "turbo build",
     "dev": "turbo dev",
     "lint": "turbo lint",
-    "test": "turbo test"
+    "test": "turbo test",
+    "start": "node -e \"console.log('🚀 Starting KubeMinder...'); require('child_process').execSync(process.platform === 'win32' ? 'start-all.bat' : './start-all.sh', {stdio: 'inherit'})\"",
+    "stop": "node -e \"console.log('🛑 Stopping KubeMinder...'); require('child_process').execSync(process.platform === 'win32' ? 'stop-all.bat' : './stop-all.sh', {stdio: 'inherit'})\"",
+    "start:all": "npm run start",
+    "stop:all": "npm run stop",
+    "check": "python check-requirements.py",
+    "test:services": "python test-services.py",
+    "test:rabbitmq": "python test-rabbitmq.py",
+    "setup": "npm run check && npm run test:rabbitmq && echo '✅ Setup complete! Run npm start to begin.'"
   },
   "repository": {
     "type": "git",

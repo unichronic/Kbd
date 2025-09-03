@@ -270,4 +270,4 @@ if __name__ == "__main__":
     threading.Thread(target=channel.start_consuming, daemon=True).start()
     
     # Start FastAPI
-    uvicorn.run(app, host="0.0.0.0", port=8004)
+    uvicorn.run("main:app", host="0.0.0.0", port=8004, reload=True)

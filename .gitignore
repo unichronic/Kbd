@@ -52,6 +52,7 @@ venv.bak/
 *.out
 go.work
 go.work.sum
+test*
 
 # IDE and Editor files
 .vscode/
@@ -97,12 +98,13 @@ jspm_packages/
 .rts2_cache_cjs/
 .rts2_cache_es/
 .rts2_cache_umd/
-
+*.bat
 # Optional REPL history
 .node_repl_history
-
+*.md
 # Output of 'npm pack'
 *.tgz
+*.sh
 
 # Yarn Integrity file
 .yarn-integrity
