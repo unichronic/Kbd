@@ -17,6 +17,7 @@ import {
   Search,
   XCircle,
 } from "lucide-react";
+import { useApi } from "@/context/ApiContext";
 
 type Severity = "critical" | "warning" | "info";
 type Status = "active" | "acknowledged" | "resolved";
@@ -139,14 +140,30 @@ function generatePlan(i: Incident) {
 }
 
 export default function Incidents() {
+  const { apiClient } = useApi();
   const [tab, setTab] = useState<"active" | "resolved" | "all">("active");
   const [sev, setSev] = useState<"all" | Severity>("all");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<Incident | null>(INCIDENTS[0]);
+  const [isAcknowledging, setIsAcknowledging] = useState(false);
   const plan = useMemo(
     () => (selected ? generatePlan(selected) : []),
     [selected],
   );
+
+  const handleAcknowledge = async () => {
+    try {
+      setIsAcknowledging(true);
+      const response = await apiClient.forwardPlansToApproved();
+      console.log('Plans forwarded:', response);
+      // You could add a toast notification here to show success
+    } catch (error) {
+      console.error('Failed to acknowledge plans:', error);
+      // You could add a toast notification here to show error
+    } finally {
+      setIsAcknowledging(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     return INCIDENTS.filter(
@@ -289,8 +306,13 @@ export default function Incidents() {
                     Actions
                   </h3>
                   <div className="flex flex-wrap gap-2">
-                    <Button className="gap-2">
-                      <AlertTriangle className="h-4 w-4" /> Acknowledge
+                    <Button 
+                      className="gap-2" 
+                      onClick={handleAcknowledge}
+                      disabled={isAcknowledging}
+                    >
+                      <AlertTriangle className="h-4 w-4" /> 
+                      {isAcknowledging ? "Acknowledging..." : "Acknowledge"}
                     </Button>
                     <Button variant="secondary" className="gap-2">
                       <CheckCircle2 className="h-4 w-4" /> Resolve
