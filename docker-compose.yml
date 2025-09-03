@@ -14,9 +14,12 @@ services:
       - RABBITMQ_DEFAULT_PASS=guest
   
   chromadb:
-    image: chromadb/chroma
+    image: chromadb/chroma:0.4.15
     container_name: chromadb
     ports:
       - "8000:8000"
     volumes:
       - ~/.docker-conf/chromadb/data/:/chroma/chroma
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000

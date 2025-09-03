@@ -87,13 +87,20 @@ def test_chromadb_connection():
     print("\n🧪 Testing ChromaDB connection...")
     
     try:
+        # Try v2 API first (newer versions)
         response = requests.get(f"{CHROMADB_URL}/api/v1/heartbeat")
         if response.status_code == 200:
-            print("✓ ChromaDB is running")
+            print("✓ ChromaDB is running (v1 API)")
         else:
-            print(f"✗ ChromaDB connection failed: {response.status_code}")
+            # Try v2 API
+            response = requests.get(f"{CHROMADB_URL}/api/v2/heartbeat")
+            if response.status_code == 200:
+                print("✓ ChromaDB is running (v2 API)")
+            else:
+                print(f"✗ ChromaDB connection failed: {response.status_code}")
     except Exception as e:
         print(f"✗ ChromaDB test failed: {e}")
+        print("  This is expected if ChromaDB is not running or has API version issues")
 
 def main():
     """Main test function"""
