@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # Grafana Loki - Log aggregation
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: planner-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml
+    networks:
+      - planner-network
+    restart: unless-stopped
+
+  # ChromaDB - Vector database for incident history
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: planner-chromadb
+    ports:
+      - "8000:8000"
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+    volumes:
+      - chromadb_data:/chroma/chroma
+    networks:
+      - planner-network
+    restart: unless-stopped
+
+  # RabbitMQ - Message broker
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: planner-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - planner-network
+    restart: unless-stopped
+
+volumes:
+  chromadb_data:
+  rabbitmq_data:
+
+networks:
+  planner-network:
+    driver: bridge

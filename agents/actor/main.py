@@ -1,6 +1,7 @@
 import json
 import asyncio
 from fastapi import FastAPI
+import uvicorn
 from contextlib import asynccontextmanager
 import aio_pika
 import os
@@ -14,7 +15,7 @@ async def lifespan(app: FastAPI):
     # Connect to RabbitMQ
     rabbitmq_host = os.getenv("RABBITMQ_HOST", "rabbitmq")
     try:
-        connection = await aio_pika.connect_robust(f"amqp://guest:guest@{rabbitmq_host}/")
+        connection = await aio_pika.connect_robust(f"amqp://guest:guest@{rabbitmq_host}:5672/")
         app.state.connection = connection
         app.state.channel = await connection.channel()
 
@@ -26,12 +27,12 @@ async def lifespan(app: FastAPI):
         await app.state.channel.set_qos(prefetch_count=1)
 
         # Declare queue and bind
-        queue = await app.state.channel.declare_queue('actor.plans.approved', durable=True,
+        queue = await app.state.channel.declare_queue('q.plans.approved', durable=True,
                                                       arguments={
                                                           "x-dead-letter-exchange": "plans",
                                                           "x-dead-letter-routing-key": "plans.approved.dlq",
                                                       })
-        await queue.bind('plans', routing_key='plans.approved')
+        await queue.bind('plans', routing_key='approved')
 
         # Start consuming messages in the background
         await queue.consume(process_plan)
@@ -90,12 +91,12 @@ async def process_plan(message: aio_pika.IncomingMessage):
                 outputs.append({"tool": "autonomy", "ok": False, "error": f"risk {risk} > max {max_risk}"})
             else:
                 # Execute steps via MCP tools
-                from agents.actor.mcp_server import shell_run, http_request
+                from mcp_server import shell_run, http_request
                 # build steps if only instructions are provided
                 instructions = plan.get("instructions")
                 if instructions and not plan.get("steps"):
                     try:
-                        from agents.actor.compile_plan import nl_to_steps
+                        from compile_plan import nl_to_steps
                         compiled = nl_to_steps(instructions, context={"sandbox": True})
                         plan["steps"] = compiled.get("steps", [])
                         print(f"Compiled steps: {plan['steps']}")
@@ -115,22 +116,22 @@ async def process_plan(message: aio_pika.IncomingMessage):
                     args = step.get("args", {}) or {}
                     try:
                         if tool == "shell.run":
-                            from agents.actor.mcp_server import shell_run
+                            from mcp_server import shell_run
                             res = await shell_run(**args)
                         elif tool == "http.request":
-                            from agents.actor.mcp_server import http_request
+                            from mcp_server import http_request
                             res = await http_request(**args)
                         elif tool == "fs.write":
-                            from agents.actor.mcp_server import fs_write
+                            from mcp_server import fs_write
                             res = await fs_write(**args)
                         elif tool == "compose.run":
-                            from agents.actor.mcp_server import compose
+                            from mcp_server import compose
                             res = await compose(**args)
                         elif tool == "docker.run":
-                            from agents.actor.mcp_server import docker
+                            from mcp_server import docker
                             res = await docker(**args)
                         elif tool == "kubectl.run":
-                            from agents.actor.mcp_server import kubectl
+                            from mcp_server import kubectl
                             res = await kubectl(**args)
                         else:
                             res = {"ok": False, "error": f"Unknown tool '{tool}'"}
@@ -206,3 +207,7 @@ def _fallback_steps_for_instructions(text: str) -> list[dict]:
             cmd_step("rollout","status",f"deployment/{deploy}","-n",ns),
         ]
     return []
+if __name__ == "__main__":
+    print("Actor: Starting to consume approved plans...")
+    # Start FastAPI (consumer starts on startup event)
+    uvicorn.run("main:app", host="0.0.0.0", port=8003, reload=True)
