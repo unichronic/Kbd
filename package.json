@@ -1,0 +1,31 @@
+{
+  "name": "kbd",
+  "version": "1.0.0",
+  "packageManager": "npm@10.9.3",
+  "description": "",
+  "main": "index.js",
+  "workspaces": [
+    "agents/*",
+    "libs/*"
+  ],
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "test": "turbo test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unichronic/Kbd.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/unichronic/Kbd/issues"
+  },
+  "homepage": "https://github.com/unichronic/Kbd#readme",
+  "devDependencies": {
+    "turbo": "^2.5.6"
+  }
+}

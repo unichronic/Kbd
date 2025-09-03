@@ -1,0 +1,10 @@
+{
+  "name": "observer",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "go run ./cmd/observer",
+    "lint": "golangci-lint run",
+    "build": "go build -o dist/observer ./cmd/observer",
+    "test": "go test ./..."
+  }
+}

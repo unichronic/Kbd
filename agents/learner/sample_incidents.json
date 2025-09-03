@@ -1,0 +1,83 @@
+[
+  {
+    "id": "INC-2025-01-03-001",
+    "timestamp": "2025-01-03T10:30:00Z",
+    "status": "resolved",
+    "severity": "high",
+    "source": "prometheus",
+    "title": "High CPU Usage on Auth Service",
+    "description": "The authentication service is experiencing sustained high CPU usage above 90% for the past 15 minutes, causing slow response times and potential service degradation.",
+    "affected_service": "auth-service",
+    "affected_namespace": "production",
+    "labels": {
+      "environment": "production",
+      "team": "platform",
+      "alert_type": "resource_usage"
+    },
+    "raw_data": {
+      "cpu_usage": 94.5,
+      "memory_usage": 78.2,
+      "response_time_p95": 2.3,
+      "error_rate": 0.02
+    },
+    "ai_hypothesis": "A memory leak in the v1.2.1 deployment is causing excessive garbage collection, leading to high CPU usage and degraded performance. The issue appears to be related to the new JWT token validation logic introduced in the latest release.",
+    "confidence_score": 0.87,
+    "resolution_action": "Rollback to v1.2.0 deployment",
+    "resolution_timestamp": "2025-01-03T10:45:00Z",
+    "resolution_notes": "Successfully rolled back the auth-service deployment from v1.2.1 to v1.2.0. CPU usage returned to normal levels within 5 minutes. The memory leak in the JWT validation logic has been identified and will be fixed in v1.2.2."
+  },
+  {
+    "id": "INC-2025-01-03-002",
+    "timestamp": "2025-01-03T14:20:00Z",
+    "status": "resolved",
+    "severity": "critical",
+    "source": "loki",
+    "title": "Database Connection Pool Exhaustion",
+    "description": "The payment service is unable to process transactions due to database connection pool exhaustion. All available connections are being held by long-running queries.",
+    "affected_service": "payment-service",
+    "affected_namespace": "production",
+    "labels": {
+      "environment": "production",
+      "team": "payments",
+      "alert_type": "database"
+    },
+    "raw_data": {
+      "active_connections": 100,
+      "max_connections": 100,
+      "query_duration_p95": 45.2,
+      "failed_transactions": 156
+    },
+    "ai_hypothesis": "A slow query in the transaction history table is blocking database connections. The query appears to be missing an index on the created_at column, causing full table scans on large datasets.",
+    "confidence_score": 0.92,
+    "resolution_action": "Kill long-running queries and add database index",
+    "resolution_timestamp": "2025-01-03T14:35:00Z",
+    "resolution_notes": "Terminated 8 long-running queries that were blocking connections. Added composite index on (user_id, created_at) to the transactions table. Service recovered within 2 minutes."
+  },
+  {
+    "id": "INC-2025-01-03-003",
+    "timestamp": "2025-01-03T16:45:00Z",
+    "status": "resolved",
+    "severity": "medium",
+    "source": "github",
+    "title": "API Rate Limit Exceeded",
+    "description": "The notification service is hitting GitHub API rate limits, causing deployment status updates to fail. This is affecting the CI/CD pipeline visibility.",
+    "affected_service": "notification-service",
+    "affected_namespace": "production",
+    "labels": {
+      "environment": "production",
+      "team": "devops",
+      "alert_type": "api_limit"
+    },
+    "raw_data": {
+      "api_calls_per_hour": 5000,
+      "rate_limit": 5000,
+      "remaining_calls": 0,
+      "reset_time": "2025-01-03T17:45:00Z"
+    },
+    "ai_hypothesis": "The notification service is making too many API calls to GitHub for deployment status updates. The current implementation doesn't implement proper rate limiting or caching, causing it to hit the API limit during peak deployment hours.",
+    "confidence_score": 0.78,
+    "resolution_action": "Implement API caching and rate limiting",
+    "resolution_timestamp": "2025-01-03T17:00:00Z",
+    "resolution_notes": "Added Redis caching for GitHub API responses with 5-minute TTL. Implemented exponential backoff for rate limit handling. Reduced API calls by 80% while maintaining functionality."
+  }
+]

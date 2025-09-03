@@ -1,0 +1,12 @@
+{
+  "name": "collaborator",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "python main.py",
+    "lint": "echo 'No linting configured'",
+    "build": "echo 'No build step for collaborator'",
+    "test": "pytest"
+  }
+}
+
+

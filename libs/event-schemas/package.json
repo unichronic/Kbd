@@ -1,0 +1,12 @@
+{
+  "name": "event-schemas",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "echo 'No dev server for event schemas'",
+    "lint": "echo 'No linting for event schemas'",
+    "build": "echo 'No build step for event schemas'",
+    "test": "echo 'No tests for event schemas'"
+  }
+}
+
+
