@@ -1,0 +1,130 @@
+{
+  "id": "enhanced-test-001",
+  "title": "Critical CPU Spike on user-service",
+  "affected_service": "user-service",
+  "hypothesis": "CPU usage has spiked to 95% causing service degradation and timeouts",
+  "symptoms": [
+    "CPU usage at 95%",
+    "Response time increased to 5.2s",
+    "Memory usage at 85%",
+    "Multiple timeout errors",
+    "Service health checks failing"
+  ],
+  "severity": "high",
+  "metrics": {
+    "cpu_usage": 95.0,
+    "memory_usage": 85.0,
+    "error_rate": 0.15,
+    "latency_p95_ms": 5200.0,
+    "request_rate_rps": 150.0
+  },
+  "logs": [
+    {
+      "timestamp": "2024-01-15T10:30:00Z",
+      "level": "error",
+      "message": "Request timeout after 5 seconds",
+      "source": "app",
+      "pod": "user-service-7d8f9b2c-1",
+      "container": "user-service",
+      "namespace": "production"
+    },
+    {
+      "timestamp": "2024-01-15T10:29:45Z",
+      "level": "error",
+      "message": "Database connection pool exhausted",
+      "source": "app",
+      "pod": "user-service-7d8f9b2c-1",
+      "container": "user-service",
+      "namespace": "production"
+    },
+    {
+      "timestamp": "2024-01-15T10:29:30Z",
+      "level": "error",
+      "message": "Memory allocation failed",
+      "source": "app",
+      "pod": "user-service-7d8f9b2c-1",
+      "container": "user-service",
+      "namespace": "production"
+    },
+    {
+      "timestamp": "2024-01-15T10:29:15Z",
+      "level": "error",
+      "message": "GC pressure causing high CPU usage",
+      "source": "app",
+      "pod": "user-service-7d8f9b2c-1",
+      "container": "user-service",
+      "namespace": "production"
+    },
+    {
+      "timestamp": "2024-01-15T10:29:00Z",
+      "level": "error",
+      "message": "Circuit breaker opened due to high error rate",
+      "source": "app",
+      "pod": "user-service-7d8f9b2c-1",
+      "container": "user-service",
+      "namespace": "production"
+    }
+  ],
+  "loki_logs": [
+    {
+      "timestamp": "2024-01-15T10:30:15Z",
+      "level": "error",
+      "message": "Kubernetes liveness probe failed",
+      "source": "loki",
+      "pod": "user-service-7d8f9b2c-1",
+      "container": "user-service",
+      "namespace": "production"
+    }
+  ],
+  "app_logs": [
+    {
+      "timestamp": "2024-01-15T10:30:30Z",
+      "level": "error",
+      "message": "Application startup timeout",
+      "source": "app",
+      "pod": "user-service-7d8f9b2c-1",
+      "container": "user-service",
+      "namespace": "production"
+    }
+  ],
+  "k8s_events": [
+    {
+      "reason": "Unhealthy",
+      "message": "Readiness probe failed: Get http://10.244.1.5:8080/health: net/http: request canceled",
+      "type": "Warning",
+      "involved_object": {
+        "kind": "Pod",
+        "name": "user-service-7d8f9b2c-1",
+        "namespace": "production"
+      },
+      "timestamp": "2024-01-15T10:30:00Z"
+    },
+    {
+      "reason": "FailedMount",
+      "message": "MountVolume.SetUp failed for volume 'config' : configmap 'user-service-config' not found",
+      "type": "Warning",
+      "involved_object": {
+        "kind": "Pod",
+        "name": "user-service-7d8f9b2c-1",
+        "namespace": "production"
+      },
+      "timestamp": "2024-01-15T10:29:45Z"
+    }
+  ],
+  "git_commits": [
+    {
+      "sha": "abc123def456",
+      "message": "Fix memory leak in user service",
+      "author": "developer@company.com",
+      "timestamp": "2024-01-15T09:00:00Z",
+      "files_changed": 3
+    },
+    {
+      "sha": "def456ghi789",
+      "message": "Update database connection pool settings",
+      "author": "developer@company.com",
+      "timestamp": "2024-01-15T08:30:00Z",
+      "files_changed": 2
+    }
+  ]
+}

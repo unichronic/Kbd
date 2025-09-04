@@ -1,0 +1,30 @@
+{
+  "id": "prometheus-cpu-alert-001",
+  "title": "High CPU Usage Alert",
+  "affected_service": "user-service",
+  "hypothesis": "CPU usage has exceeded 80% threshold",
+  "symptoms": [
+    "CPU usage at 85%",
+    "Response time increased"
+  ],
+  "severity": "high",
+  "metrics": {
+    "cpu_usage": 85.0,
+    "memory_usage": 70.0
+  },
+  "labels": {
+    "alertname": "HighCPUUsage",
+    "instance": "user-service-7d8f9b2c-1",
+    "job": "kubernetes-pods",
+    "namespace": "production",
+    "pod": "user-service-7d8f9b2c-1",
+    "severity": "warning"
+  },
+  "annotations": {
+    "description": "CPU usage is above 80% for more than 5 minutes",
+    "summary": "High CPU usage detected on user-service pod"
+  },
+  "status": "firing",
+  "startsAt": "2024-01-15T10:25:00Z",
+  "endsAt": "0001-01-01T00:00:00Z"
+}

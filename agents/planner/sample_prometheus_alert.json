@@ -1,0 +1,31 @@
+{
+  "id": "prometheus-alert-001",
+  "title": "High CPU Usage on user-service",
+  "affected_service": "user-service",
+  "hypothesis": "CPU usage has exceeded 80% for more than 5 minutes",
+  "symptoms": [
+    "CPU usage at 85%",
+    "Response time increased to 2.5s",
+    "Memory usage at 70%"
+  ],
+  "severity": "high",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "source": "prometheus",
+  "alert_rule": "high_cpu_usage",
+  "labels": {
+    "alertname": "HighCPUUsage",
+    "instance": "user-service-7d8f9b2c-1",
+    "job": "kubernetes-pods",
+    "namespace": "production",
+    "pod": "user-service-7d8f9b2c-1",
+    "severity": "warning"
+  },
+  "annotations": {
+    "description": "CPU usage is above 80% for more than 5 minutes",
+    "summary": "High CPU usage detected on user-service pod"
+  },
+  "status": "firing",
+  "startsAt": "2024-01-15T10:25:00Z",
+  "endsAt": "0001-01-01T00:00:00Z",
+  "generatorURL": "http://prometheus:9090/graph?g0.expr=rate%28container_cpu_usage_seconds_total%7Bpod%3D%22user-service-7d8f9b2c-1%22%7D%5B5m%5D%29+%3E+0.8"
+}

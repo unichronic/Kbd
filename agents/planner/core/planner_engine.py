@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.schema import HumanMessage
 from .prompt_templates import PromptTemplates
-from ..models.context import EnrichedContext
+from models.context import EnrichedContext
 
 
 class PlannerEngine:

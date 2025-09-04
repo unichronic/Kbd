@@ -6,7 +6,18 @@ from contextlib import asynccontextmanager
 import aio_pika
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 load_dotenv()
+
+# Import MongoDB client
+try:
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'planner'))
+    from utils.mongodb_client import mongodb_storage
+    MONGODB_AVAILABLE = True
+except ImportError:
+    print("Warning: MongoDB client not available in actor")
+    MONGODB_AVAILABLE = False
 # FastAPI application with lifespan context manager
 # The lifespan handles startup and shutdown tasks gracefully
 # like connecting and disconnecting from RabbitMQ.
@@ -145,6 +156,23 @@ async def process_plan(message: aio_pika.IncomingMessage):
                         break
 
             duration_ms = int((time.perf_counter() - start) * 1000)
+
+            # Update plan status in MongoDB
+            if MONGODB_AVAILABLE and mongodb_storage.is_connected():
+                try:
+                    final_status = "completed" if status == "resolved" else "failed"
+                    mongodb_storage.update_plan_status(
+                        plan.get("id", "N/A"),
+                        final_status,
+                        started_at=datetime.utcnow(),
+                        completed_at=datetime.utcnow(),
+                        executed_by="actor_agent",
+                        execution_output=json.dumps(outputs),
+                        success_metrics={"duration_ms": duration_ms, "status": status}
+                    )
+                    print(f"Updated plan {plan.get('id', 'N/A')} status in MongoDB to {final_status}")
+                except Exception as e:
+                    print(f"Failed to update plan status in MongoDB: {e}")
 
             # Publish resolution
             resolution = {

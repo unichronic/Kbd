@@ -9,7 +9,7 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional
 import httpx
-from ..models.context import ContextSource
+from models.context import ContextSource
 
 
 class LokiClient:

@@ -1,54 +1,70 @@
 version: '3.8'
 
 services:
-  # Grafana Loki - Log aggregation
-  loki:
-    image: grafana/loki:2.9.0
-    container_name: planner-loki
-    ports:
-      - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - ./loki-config.yaml:/etc/loki/local-config.yaml
-    networks:
-      - planner-network
-    restart: unless-stopped
-
-  # ChromaDB - Vector database for incident history
-  chromadb:
-    image: chromadb/chroma:latest
-    container_name: planner-chromadb
-    ports:
-      - "8000:8000"
-    environment:
-      - CHROMA_SERVER_HOST=0.0.0.0
-      - CHROMA_SERVER_HTTP_PORT=8000
-    volumes:
-      - chromadb_data:/chroma/chroma
-    networks:
-      - planner-network
-    restart: unless-stopped
-
-  # RabbitMQ - Message broker
   rabbitmq:
     image: rabbitmq:3-management
-    container_name: planner-rabbitmq
+    container_name: rabbitmq
     ports:
       - "5672:5672"
       - "15672:15672"
     environment:
-      - RABBITMQ_DEFAULT_USER=guest
-      - RABBITMQ_DEFAULT_PASS=guest
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
     networks:
-      - planner-network
-    restart: unless-stopped
+      - kubeminder-net
 
-volumes:
-  chromadb_data:
-  rabbitmq_data:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    networks:
+      - kubeminder-net
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - kubeminder-net
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - kubeminder-net
+
+  test-service:
+    build:
+      context: ./test-service
+      dockerfile: Dockerfile
+    container_name: test-service
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=8080"
+    networks:
+      - kubeminder-net
+
+  crash-service:
+    image: gaiaadm/pumba:latest
+    container_name: crash-service
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: tail -f /dev/null
+    networks:
+      - kubeminder-net
 
 networks:
-  planner-network:
+  kubeminder-net:
     driver: bridge

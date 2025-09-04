@@ -22,7 +22,7 @@ services:
       - ~/.docker-conf/chromadb/data/:/chroma/chroma
 
   actor_agent:
-    build: .
+    build: ./agents/actor
     container_name: actor_agent
     ports:
       - "8003:8003"
@@ -87,4 +87,16 @@ services:
     depends_on:
       - rabbitmq
       - chromadb
+    restart: unless-stopped
+
+  observer:
+    build: ./agents/observer
+    container_name: observer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - rabbitmq
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - SERVER_PORT=8080
     restart: unless-stopped

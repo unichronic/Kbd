@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 import pika
@@ -10,11 +11,100 @@ from pydantic import BaseModel, Field
 import uvicorn
 
 # Import new modular components
-from context.gatherer import ContextGatherer
-from core.planner_engine import PlannerEngine
-from models.incident import LogEntry, MetricsSummary, K8sEvent, GitCommit, IncidentModel
-from models.context import EnrichedContext
-from utils.retry_handler import RetryHandler
+try:
+    from context.gatherer import ContextGatherer
+    from core.planner_engine import PlannerEngine
+    from models.incident import LogEntry, MetricsSummary, K8sEvent, GitCommit, IncidentModel
+    from models.context import EnrichedContext
+    from models.plan import PlanModel, PlanMetadata, PlanType
+    from utils.retry_handler import RetryHandler
+    from utils.mongodb_client import mongodb_storage
+    from quota_manager import should_use_enhanced_planning_with_quota, record_planning_request, get_quota_status, get_quota_recommendations
+except ImportError as e:
+    print(f"Warning: Could not import enhanced components: {e}")
+    print("Falling back to basic planner functionality")
+    
+    # Create minimal fallback classes
+    from typing import List, Dict, Any, Optional
+    from enum import Enum
+    
+    class ContextSource(Enum):
+        LOKI = "loki"
+        CHROMADB = "chromadb"
+        GITHUB = "github"
+        WEB_SEARCH = "web_search"
+    
+    class LogEntry(BaseModel):
+        timestamp: Optional[str] = None
+        level: str = "info"
+        message: str
+        source: Optional[str] = None
+        pod: Optional[str] = None
+        container: Optional[str] = None
+        namespace: Optional[str] = None
+    
+    class MetricsSummary(BaseModel):
+        cpu_usage: Optional[float] = None
+        memory_usage: Optional[float] = None
+        error_rate: Optional[float] = None
+        latency_p95_ms: Optional[float] = None
+        request_rate_rps: Optional[float] = None
+        additional: Dict[str, Any] = Field(default_factory=dict)
+    
+    class K8sEvent(BaseModel):
+        reason: Optional[str] = None
+        message: Optional[str] = None
+        type: Optional[str] = None
+        involved_object: Optional[str] = None
+        timestamp: Optional[str] = None
+    
+    class GitCommit(BaseModel):
+        sha: Optional[str] = None
+        message: Optional[str] = None
+        author: Optional[str] = None
+        timestamp: Optional[str] = None
+        files_changed: Optional[int] = None
+    
+    class IncidentModel(BaseModel):
+        id: str
+        title: Optional[str] = None
+        affected_service: Optional[str] = None
+        hypothesis: Optional[str] = None
+        symptoms: Optional[List[str]] = None
+        severity: Optional[str] = None
+        metrics: Optional[Dict[str, Any]] = None
+        logs: Optional[List[Dict[str, Any]]] = None
+        loki_logs: Optional[List[Dict[str, Any]]] = None
+        app_logs: Optional[List[Dict[str, Any]]] = None
+        k8s_events: Optional[List[Dict[str, Any]]] = None
+        git_commits: Optional[List[Dict[str, Any]]] = None
+        # Prometheus alert specific fields
+        labels: Optional[Dict[str, Any]] = None
+        annotations: Optional[Dict[str, Any]] = None
+        status: Optional[str] = None
+        startsAt: Optional[str] = None
+        endsAt: Optional[str] = None
+        generatorURL: Optional[str] = None
+        source: Optional[str] = None
+        alert_rule: Optional[str] = None
+        timestamp: Optional[str] = None
+    
+    class EnrichedContext(BaseModel):
+        loki_logs: List[Dict[str, Any]] = Field(default_factory=list)
+        similar_incidents: List[Any] = Field(default_factory=list)
+        recent_commits: List[Dict[str, Any]] = Field(default_factory=list)
+        web_knowledge: List[Dict[str, Any]] = Field(default_factory=list)
+        sources_used: List[ContextSource] = Field(default_factory=list)
+        gathering_time_ms: int = 0
+        internal_confidence: float = 0.0
+        web_search_triggered: bool = False
+        web_search_reason: Optional[str] = None
+        gathering_errors: Dict[ContextSource, str] = Field(default_factory=dict)
+    
+    # Set fallback classes
+    ContextGatherer = None
+    PlannerEngine = None
+    RetryHandler = None
 
 try:
     import google.generativeai as genai
@@ -28,13 +118,13 @@ app = FastAPI(title="Planner Agent")
 # Configuration and setup
 load_dotenv()
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5673/")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # Context enrichment configuration
 LOKI_URL = os.getenv("LOKI_URL", "http://localhost:3100")
-CHROMADB_URL = os.getenv("CHROMADB_URL", "http://localhost:8000")
+CHROMADB_URL = os.getenv("CHROMADB_URL", "http://localhost:8002")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER")
@@ -90,17 +180,28 @@ def build_planner_prompt(incident: Dict[str, Any]) -> str:
 context_gatherer: Optional[ContextGatherer] = None
 planner_engine: Optional[PlannerEngine] = None
 
+# Simple request cache to avoid duplicate API calls
+request_cache: Dict[str, Dict[str, Any]] = {}
+CACHE_TTL_SECONDS = 300  # 5 minutes
+
 
 def initialize_enhanced_components():
     """Initialize the enhanced planner components."""
     global context_gatherer, planner_engine
+    
+    # Check if enhanced components are available
+    if ContextGatherer is None or PlannerEngine is None:
+        print("Enhanced Planner: Enhanced components not available, using basic functionality")
+        context_gatherer = None
+        planner_engine = None
+        return
     
     try:
         # Initialize context gatherer
         context_gatherer = ContextGatherer(
             loki_url=LOKI_URL,
             chromadb_host="localhost",
-            chromadb_port=8000,
+            chromadb_port=8002,
             github_token=GITHUB_TOKEN,
             github_repo_owner=GITHUB_REPO_OWNER,
             github_repo_name=GITHUB_REPO_NAME,
@@ -125,20 +226,69 @@ def initialize_enhanced_components():
 
 
 def get_plan_type(incident_data: Dict[str, Any]) -> str:
-    """Determine the appropriate plan type based on incident characteristics."""
-    severity = incident_data.get('derived', {}).get('severity', 'low')
-    error_log_count = incident_data.get('derived', {}).get('error_log_count', 0)
-    
-    # Quick plan for urgent incidents
-    if severity == 'high' and error_log_count > 10:
-        return 'quick'
-    
-    # Deep dive for complex incidents
-    if severity == 'high' and error_log_count > 5:
-        return 'deep_dive'
-    
-    # Comprehensive plan for most incidents
+    """
+    Determine the appropriate plan type based on incident characteristics.
+    For Prometheus alerts, we use a simple approach:
+    - All incidents get 'comprehensive' planning initially
+    - The context gathering will determine if we need more investigation
+    """
+    # For Prometheus alerts, we always start with comprehensive planning
+    # The context gathering will tell us if we need to dig deeper
     return 'comprehensive'
+
+
+def should_use_enhanced_planning(incident_data: Dict[str, Any]) -> bool:
+    """
+    Determine if we should use enhanced planning (API calls) based on incident priority.
+    For Prometheus alerts, we use a simple severity-based approach.
+    """
+    severity = incident_data.get('derived', {}).get('severity', 'low')
+    service = incident_data.get('affected_service', '')
+    
+    # Always use enhanced planning for high-severity incidents
+    if severity == 'high':
+        return True
+    
+    # Use enhanced planning for critical services (regardless of severity)
+    critical_services = ['user-service', 'payment-service', 'auth-service', 'api-gateway']
+    if any(critical in service.lower() for critical in critical_services):
+        return True
+    
+    # For medium/low severity on non-critical services, use basic planning to conserve quota
+    return False
+
+
+def get_context_priority(incident_data: Dict[str, Any]) -> Dict[str, bool]:
+    """
+    Determine which context sources to prioritize based on incident characteristics.
+    For Prometheus alerts, we use a simple approach:
+    - Always gather internal context (Loki, ChromaDB)
+    - GitHub and Web Search are determined by confidence-based logic
+    """
+    severity = incident_data.get('derived', {}).get('severity', 'low')
+    service = incident_data.get('affected_service', '')
+    
+    # Base priority - always use internal sources for Prometheus alerts
+    priority = {
+        'loki': True,      # Always get recent logs from Loki
+        'chromadb': True,  # Always check historical incidents
+        'github': False,   # Will be determined by confidence logic
+        'web_search': False  # Will be determined by confidence logic
+    }
+    
+    # High severity incidents get GitHub context (recent code changes)
+    if severity == 'high':
+        priority['github'] = True
+    
+    # Critical services get GitHub context (recent code changes)
+    critical_services = ['user-service', 'payment-service', 'auth-service', 'api-gateway']
+    if any(critical in service.lower() for critical in critical_services):
+        priority['github'] = True
+    
+    # Web search is handled by confidence-based logic in the context gatherer
+    # We don't pre-determine it here
+    
+    return priority
 
 
 def _coerce_level(msg: str, level: Optional[str]) -> str:
@@ -198,11 +348,20 @@ def normalize_incident(raw: IncidentModel) -> Dict[str, Any]:
         for c in raw.git_commits:
             commits.append(GitCommit(**{k: c.get(k) for k in ["sha", "message", "author", "timestamp", "files_changed"]}))
 
-    # Heuristic severity
-    high_error = metrics.error_rate is not None and metrics.error_rate >= 0.05
-    high_latency = metrics.latency_p95_ms is not None and metrics.latency_p95_ms >= 800
+    # Heuristic severity - respect original severity if set, otherwise calculate
+    original_severity = raw.severity
+    
+    if original_severity and original_severity in ['low', 'medium', 'high']:
+        # Use original severity if it's valid
+        severity = original_severity
+    else:
+        # Calculate severity based on metrics and logs
+        high_error = metrics.error_rate is not None and metrics.error_rate >= 0.05
+        high_latency = metrics.latency_p95_ms is not None and metrics.latency_p95_ms >= 800
+        error_logs = sum(1 for l in merged_logs if l.level == "error")
+        severity = "high" if (high_error or high_latency or error_logs > 5) else ("medium" if error_logs > 0 else "low")
+    
     error_logs = sum(1 for l in merged_logs if l.level == "error")
-    severity = "high" if (high_error or high_latency or error_logs > 5) else ("medium" if error_logs > 0 else "low")
 
     normalized = {
         "id": raw.id,
@@ -220,6 +379,22 @@ def normalize_incident(raw: IncidentModel) -> Dict[str, Any]:
 
 
 def generate_plan_with_gemini(incident: Dict[str, Any]) -> Dict[str, Any]:
+    # Create cache key based on incident characteristics
+    cache_key = f"{incident.get('id', 'unknown')}_{incident.get('title', '')}_{incident.get('affected_service', '')}"
+    
+    # Check cache first
+    if cache_key in request_cache:
+        cached_data = request_cache[cache_key]
+        cache_time = cached_data.get('timestamp', 0)
+        current_time = time.time()
+        
+        if current_time - cache_time < CACHE_TTL_SECONDS:
+            print(f"Enhanced Planner: Using cached plan for {incident.get('id', 'unknown')}")
+            return cached_data['plan']
+        else:
+            # Remove expired cache entry
+            del request_cache[cache_key]
+    
     model = ensure_gemini_client()
     prompt = build_planner_prompt(incident)
     # Best-effort call; SDK does not expose timeout directly, so rely on default client behavior.
@@ -236,7 +411,13 @@ def generate_plan_with_gemini(incident: Dict[str, Any]) -> Dict[str, Any]:
             cleaned = cleaned[: -3]
     # Try direct parse first
     try:
-        return json.loads(cleaned)
+        plan = json.loads(cleaned)
+        # Cache the successful result
+        request_cache[cache_key] = {
+            'plan': plan,
+            'timestamp': time.time()
+        }
+        return plan
     except Exception:
         # Try to extract first JSON object
         import re
@@ -244,7 +425,13 @@ def generate_plan_with_gemini(incident: Dict[str, Any]) -> Dict[str, Any]:
         if m:
             candidate = m.group(0)
             try:
-                return json.loads(candidate)
+                plan = json.loads(candidate)
+                # Cache the successful result
+                request_cache[cache_key] = {
+                    'plan': plan,
+                    'timestamp': time.time()
+                }
+                return plan
             except Exception:
                 pass
         raise ValueError(f"LLM returned non-JSON: {text[:500]}")
@@ -272,9 +459,14 @@ async def diagnostics_enhanced():
             },
             "configuration": {
                 "loki_url": LOKI_URL,
-                "chromadb_url": f"http://localhost:8000",
+                "chromadb_url": f"http://localhost:8002",
                 "github_configured": GITHUB_TOKEN is not None,
                 "web_search_configured": TAVILY_API_KEY is not None
+            },
+            "quota_management": {
+                "cache_size": len(request_cache),
+                "cache_ttl_seconds": CACHE_TTL_SECONDS,
+                "cached_plans": list(request_cache.keys())
             }
         }
         
@@ -332,6 +524,27 @@ async def diagnostics_context():
         return {"error": str(exc)}
 
 
+@app.get("/diagnostics/quota")
+def diagnostics_quota():
+    """Get quota usage and management information."""
+    try:
+        quota_status = get_quota_status()
+        recommendations = get_quota_recommendations()
+        
+        return {
+            "quota_status": quota_status,
+            "recommendations": recommendations,
+            "cache_info": {
+                "cache_size": len(request_cache),
+                "cache_ttl_seconds": CACHE_TTL_SECONDS,
+                "cached_plans": list(request_cache.keys())
+            }
+        }
+        
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 async def process_incident_enhanced(ch, method, properties, body):
     """Enhanced incident processing with context enrichment."""
     incoming = json.loads(body)
@@ -344,38 +557,91 @@ async def process_incident_enhanced(ch, method, properties, body):
                             affected_service=incoming.get("affected_service"),
                             hypothesis=incoming.get("hypothesis"),
                             symptoms=incoming.get("symptoms"),
+                            severity=incoming.get("severity"),
                             metrics=incoming.get("metrics"),
                             logs=incoming.get("logs"),
                             loki_logs=incoming.get("loki_logs"),
                             app_logs=incoming.get("app_logs"),
                             k8s_events=incoming.get("k8s_events"),
-                            git_commits=incoming.get("git_commits"))
+                            git_commits=incoming.get("git_commits"),
+                            labels=incoming.get("labels"),
+                            annotations=incoming.get("annotations"),
+                            status=incoming.get("status"),
+                            startsAt=incoming.get("startsAt"),
+                            endsAt=incoming.get("endsAt"),
+                            generatorURL=incoming.get("generatorURL"),
+                            source=incoming.get("source"),
+                            alert_rule=incoming.get("alert_rule"),
+                            timestamp=incoming.get("timestamp"))
     
     incident = normalize_incident(raw)
     incident_id = incident.get("id", "unknown")
     print(f"Enhanced Planner: Processing incident {incident_id} with context enrichment")
 
     try:
+        # Determine if we should use enhanced planning (API calls) with quota awareness
+        use_enhanced = should_use_enhanced_planning_with_quota(incident, "normal")
+        print(f"Enhanced Planner: Enhanced planning {'enabled' if use_enhanced else 'disabled'} for incident {incident_id}")
+        
+        # Show quota status
+        quota_status = get_quota_status()
+        print(f"Enhanced Planner: Quota status - {quota_status['daily_usage']}/{quota_status['daily_limit']} daily, {quota_status['hourly_usage']}/{quota_status['hourly_limit']} hourly")
+        
         # Determine plan type based on incident characteristics
         plan_type = get_plan_type(incident)
         print(f"Enhanced Planner: Using {plan_type} plan type for incident {incident_id}")
         
-        # Gather enriched context if components are available
+        # Gather enriched context if components are available and enhanced planning is enabled
         enriched_context = None
-        if context_gatherer:
+        if context_gatherer and use_enhanced:
             try:
+                # Get context priority based on incident characteristics
+                context_priority = get_context_priority(incident)
+                print(f"Enhanced Planner: Context priority: {context_priority}")
+                
+                print(f"Enhanced Planner: Starting context gathering for incident {incident_id}")
+                print(f"Enhanced Planner: Available context sources:")
+                print(f"  • Loki: {LOKI_URL}")
+                print(f"  • ChromaDB: http://localhost:8002")
+                print(f"  • GitHub: {'configured' if GITHUB_TOKEN else 'not configured'}")
+                print(f"  • Web Search: {'configured' if TAVILY_API_KEY else 'not configured'}")
+                
                 enriched_context = await context_gatherer.gather_all_context(
                     incident, 
                     parallel=True, 
                     confidence_threshold=CONFIDENCE_THRESHOLD
                 )
-                print(f"Enhanced Planner: Gathered context from {len(enriched_context.sources_used)} sources")
+                
+                # Detailed context gathering results
+                print(f"Enhanced Planner: Context gathering completed in {enriched_context.gathering_time_ms}ms")
+                print(f"Enhanced Planner: Sources used: {[source.value for source in enriched_context.sources_used]}")
+                print(f"Enhanced Planner: Context results:")
+                print(f"  • Loki logs: {len(enriched_context.loki_logs)} entries")
+                print(f"  • Similar incidents: {len(enriched_context.similar_incidents)} found")
+                print(f"  • Recent commits: {len(enriched_context.recent_commits)} found")
+                print(f"  • Web knowledge: {len(enriched_context.web_knowledge)} entries")
+                print(f"  • Internal confidence: {enriched_context.internal_confidence:.3f}")
+                print(f"  • Web search triggered: {enriched_context.web_search_triggered}")
+                if enriched_context.web_search_reason:
+                    print(f"  • Web search reason: {enriched_context.web_search_reason}")
+                
+                # Show any errors
+                if enriched_context.gathering_errors:
+                    print(f"Enhanced Planner: Context gathering errors:")
+                    for source, error in enriched_context.gathering_errors.items():
+                        print(f"  • {source.value}: {error}")
+                
             except Exception as e:
                 print(f"Enhanced Planner: Context gathering failed: {e}")
+                print(f"Enhanced Planner: Error type: {type(e).__name__}")
+                import traceback
+                print(f"Enhanced Planner: Traceback: {traceback.format_exc()}")
                 enriched_context = None
+        elif not use_enhanced:
+            print(f"Enhanced Planner: Skipping context gathering to conserve API quota")
         
-        # Generate plan using enhanced engine if available
-        if planner_engine and enriched_context:
+        # Generate plan using enhanced engine if available and enhanced planning is enabled
+        if planner_engine and enriched_context and use_enhanced:
             if plan_type == 'quick':
                 plan = await planner_engine.generate_quick_plan(incident, enriched_context)
             elif plan_type == 'deep_dive':
@@ -384,7 +650,7 @@ async def process_incident_enhanced(ch, method, properties, body):
                 plan = await planner_engine.generate_comprehensive_plan(incident, enriched_context)
         else:
             # Fall back to original plan generation
-            print(f"Enhanced Planner: Falling back to basic plan generation")
+            print(f"Enhanced Planner: Using basic plan generation (quota conservation)")
             plan = generate_plan_with_gemini(incident)
         
         # Ensure required fields
@@ -409,6 +675,9 @@ async def process_incident_enhanced(ch, method, properties, body):
             except Exception as e:
                 print(f"Enhanced Planner: Failed to store incident for future reference: {e}")
 
+        # Record the planning request for quota tracking
+        record_planning_request("plan_generation", "normal", True)
+
         # Publish plan
         ch.basic_publish(
             exchange="plans",
@@ -417,6 +686,41 @@ async def process_incident_enhanced(ch, method, properties, body):
             properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
         )
         print(f"Enhanced Planner: Published {plan_type} plan {plan['id']}")
+        
+        # Save plan to MongoDB
+        try:
+            # Create plan metadata
+            plan_metadata = PlanMetadata(
+                plan_type=PlanType(plan_type) if plan_type in ['quick', 'comprehensive', 'deep_dive'] else PlanType.COMPREHENSIVE,
+                enhanced=enriched_context is not None,
+                context_sources=plan.get('metadata', {}).get('context_sources', []),
+                gathering_time_ms=plan.get('metadata', {}).get('gathering_time_ms'),
+                model_used="gemini"
+            )
+            
+            # Create structured plan model
+            structured_plan = PlanModel(
+                id=plan['id'],
+                incident_id=plan['incident_id'],
+                title=plan.get('title', f"Plan for {incident.get('title', 'Incident')}"),
+                description=plan.get('description'),
+                steps=[],  # Will be populated from plan steps if available
+                risk_level=plan.get('risk_level', 'low'),
+                status='proposed',
+                metadata=plan_metadata,
+                source='planner'
+            )
+            
+            # Save to MongoDB
+            if mongodb_storage.save_plan(structured_plan.to_dict()):
+                print(f"Enhanced Planner: Plan {plan['id']} saved to MongoDB successfully")
+            else:
+                print(f"Enhanced Planner: Failed to save plan {plan['id']} to MongoDB")
+                
+        except Exception as e:
+            print(f"Enhanced Planner: Error saving plan to MongoDB: {e}")
+            # Don't fail the entire process if MongoDB save fails
+        
         ch.basic_ack(delivery_tag=method.delivery_tag)
         
     except Exception as exc:
@@ -520,6 +824,154 @@ async def preview_plan(incident: IncidentModel):
     except Exception as exc:
         # No fallback plan; return structured error for caller
         return {"error": "planner_llm_error", "detail": str(exc)}
+
+
+# API endpoints for frontend integration
+@app.get("/api/plans")
+async def get_plans(limit: int = 50, status: Optional[str] = None, incident_id: Optional[str] = None):
+    """Get plans from MongoDB with optional filtering."""
+    try:
+        if not mongodb_storage.is_connected():
+            return {"error": "MongoDB not connected", "plans": []}
+        
+        if incident_id:
+            plans = mongodb_storage.get_plans_by_incident(incident_id)
+        else:
+            plans = mongodb_storage.get_recent_plans(limit=limit)
+        
+        # Filter by status if provided
+        if status:
+            plans = [plan for plan in plans if plan.get("status") == status]
+        
+        return {"plans": plans, "count": len(plans)}
+    except Exception as e:
+        return {"error": str(e), "plans": []}
+
+
+@app.get("/api/plans/{plan_id}")
+async def get_plan(plan_id: str):
+    """Get a specific plan by ID."""
+    try:
+        if not mongodb_storage.is_connected():
+            return {"error": "MongoDB not connected"}
+        
+        plan = mongodb_storage.get_plan(plan_id)
+        if plan:
+            return {"plan": plan}
+        else:
+            return {"error": "Plan not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/incidents")
+async def get_incidents(limit: int = 50):
+    """Get incidents with their associated plans."""
+    try:
+        if not mongodb_storage.is_connected():
+            return {"error": "MongoDB not connected", "incidents": []}
+        
+        # Get recent plans and group by incident
+        plans = mongodb_storage.get_recent_plans(limit=limit * 2)  # Get more plans to ensure we have incidents
+        
+        # Group plans by incident_id
+        incidents_dict = {}
+        for plan in plans:
+            incident_id = plan.get("incident_id")
+            if incident_id:
+                if incident_id not in incidents_dict:
+                    incidents_dict[incident_id] = {
+                        "incident_id": incident_id,
+                        "title": plan.get("title", f"Incident {incident_id}"),
+                        "plans": [],
+                        "latest_plan": None,
+                        "plan_count": 0
+                    }
+                
+                incidents_dict[incident_id]["plans"].append(plan)
+                incidents_dict[incident_id]["plan_count"] += 1
+                
+                # Keep track of the latest plan
+                if not incidents_dict[incident_id]["latest_plan"] or \
+                   plan.get("created_at", "") > incidents_dict[incident_id]["latest_plan"].get("created_at", ""):
+                    incidents_dict[incident_id]["latest_plan"] = plan
+        
+        # Convert to list and sort by latest plan creation time
+        incidents = list(incidents_dict.values())
+        incidents.sort(key=lambda x: x["latest_plan"].get("created_at", "") if x["latest_plan"] else "", reverse=True)
+        
+        return {"incidents": incidents[:limit], "count": len(incidents)}
+    except Exception as e:
+        return {"error": str(e), "incidents": []}
+
+
+@app.get("/api/incidents/{incident_id}/plans")
+async def get_incident_plans(incident_id: str):
+    """Get all plans for a specific incident."""
+    try:
+        if not mongodb_storage.is_connected():
+            return {"error": "MongoDB not connected", "plans": []}
+        
+        plans = mongodb_storage.get_plans_by_incident(incident_id)
+        return {"incident_id": incident_id, "plans": plans, "count": len(plans)}
+    except Exception as e:
+        return {"error": str(e), "plans": []}
+
+
+@app.get("/api/stats")
+async def get_stats():
+    """Get statistics about plans and incidents."""
+    try:
+        if not mongodb_storage.is_connected():
+            return {"error": "MongoDB not connected"}
+        
+        # Get recent plans for statistics
+        recent_plans = mongodb_storage.get_recent_plans(limit=1000)
+        
+        # Calculate statistics
+        stats = {
+            "total_plans": len(recent_plans),
+            "plans_by_status": {},
+            "plans_by_type": {},
+            "recent_activity": {
+                "last_24h": 0,
+                "last_7d": 0
+            }
+        }
+        
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        last_24h = now - timedelta(hours=24)
+        last_7d = now - timedelta(days=7)
+        
+        for plan in recent_plans:
+            # Count by status
+            status = plan.get("status", "unknown")
+            stats["plans_by_status"][status] = stats["plans_by_status"].get(status, 0) + 1
+            
+            # Count by type
+            plan_type = plan.get("metadata", {}).get("plan_type", "unknown")
+            stats["plans_by_type"][plan_type] = stats["plans_by_type"].get(plan_type, 0) + 1
+            
+            # Count recent activity
+            created_at = plan.get("created_at")
+            if created_at:
+                try:
+                    if isinstance(created_at, str):
+                        created_dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    else:
+                        created_dt = created_at
+                    
+                    if created_dt >= last_24h:
+                        stats["recent_activity"]["last_24h"] += 1
+                    if created_dt >= last_7d:
+                        stats["recent_activity"]["last_7d"] += 1
+                except:
+                    pass
+        
+        return {"stats": stats}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
