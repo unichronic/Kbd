@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
-from ..models.context import SimilarIncident, ContextSource
+from models.context import SimilarIncident, ContextSource
 
 
 class ChromaDBClient:
@@ -19,7 +19,7 @@ class ChromaDBClient:
     def __init__(
         self, 
         host: str = "localhost", 
-        port: int = 8000,
+        port: int = 8002,
         collection_name: str = "incident_history",
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     ):

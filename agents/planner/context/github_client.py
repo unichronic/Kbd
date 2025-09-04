@@ -9,7 +9,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from github import Github
 from github.GithubException import GithubException
-from ..models.context import ContextSource
+from models.context import ContextSource
 
 
 class GitHubClient:

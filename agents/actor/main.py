@@ -1,12 +1,28 @@
 import json
 import asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import datetime
+import pathlib
+import shutil
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 from contextlib import asynccontextmanager
 import aio_pika
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 load_dotenv()
+
+# Import MongoDB client
+try:
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'planner'))
+    from utils.mongodb_client import mongodb_storage
+    MONGODB_AVAILABLE = True
+except ImportError:
+    print("Warning: MongoDB client not available in actor")
+    MONGODB_AVAILABLE = False
 # FastAPI application with lifespan context manager
 # The lifespan handles startup and shutdown tasks gracefully
 # like connecting and disconnecting from RabbitMQ.
@@ -146,6 +162,23 @@ async def process_plan(message: aio_pika.IncomingMessage):
 
             duration_ms = int((time.perf_counter() - start) * 1000)
 
+            # Update plan status in MongoDB
+            if MONGODB_AVAILABLE and mongodb_storage.is_connected():
+                try:
+                    final_status = "completed" if status == "resolved" else "failed"
+                    mongodb_storage.update_plan_status(
+                        plan.get("id", "N/A"),
+                        final_status,
+                        started_at=datetime.utcnow(),
+                        completed_at=datetime.utcnow(),
+                        executed_by="actor_agent",
+                        execution_output=json.dumps(outputs),
+                        success_metrics={"duration_ms": duration_ms, "status": status}
+                    )
+                    print(f"Updated plan {plan.get('id', 'N/A')} status in MongoDB to {final_status}")
+                except Exception as e:
+                    print(f"Failed to update plan status in MongoDB: {e}")
+
             # Publish resolution
             resolution = {
                 "incident_id": plan.get("incident_id", "N/A"),
@@ -180,6 +213,156 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "healthy"}
+
+# Mount a directory to serve static files (the zip packages)
+pathlib.Path("deployment_packages").mkdir(exist_ok=True)
+app.mount("/packages", StaticFiles(directory="deployment_packages"), name="packages")
+
+class InfraPackageRequest(BaseModel):
+    infrastructure_code: str
+
+@app.post("/api/package/create")
+def create_deployment_package(request: InfraPackageRequest):
+    """Creates a deployment package from infrastructure code using a state machine."""
+    try:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        package_dir = pathlib.Path(f"deployment_packages/{timestamp}")
+        package_dir.mkdir(parents=True, exist_ok=True)
+
+        files = {}
+        import re
+
+        content = request.infrastructure_code
+        lines = content.split('\n')
+
+        # State machine for parsing
+        state = "LOOKING_FOR_FILENAME"
+        current_file = None
+        current_content = []
+
+        print(f"DEBUG: Starting parser. State: {state}")
+
+        for i, line in enumerate(lines):
+            stripped_line = line.strip()
+
+            if state == "LOOKING_FOR_FILENAME":
+                # Regex to detect a filename (e.g., path/to/file.ext)
+                # It should not be in a sentence, so we check for minimal surrounding characters.
+                if re.fullmatch(r'[a-zA-Z0-9._/-]+\.[a-zA-Z]{2,}', stripped_line):
+                    # Save previous file's content
+                    if current_file:
+                        # We only save if we have content, to avoid saving empty files between filename and code block
+                        if current_content:
+                            files[current_file] = '\n'.join(current_content).strip()
+                            print(f"DEBUG: Saved content for {current_file}")
+                        else:
+                            print(f"DEBUG: No content for {current_file}, skipping save.")
+                    
+                    current_file = stripped_line
+                    current_content = []
+                    state = "LOOKING_FOR_CODE_START"
+                    print(f"DEBUG: Line {i}: Found filename '{current_file}'. State -> {state}")
+                    continue # Continue to next line to avoid processing filename as other states
+
+            if state == "LOOKING_FOR_CODE_START":
+                if stripped_line == '```':
+                    state = "IN_CODE_BLOCK"
+                    print(f"DEBUG: Line {i}: Found code start. State -> {state}")
+                # If we find another filename, it means the previous one had no code block.
+                elif re.fullmatch(r'[a-zA-Z0-9._/-]+\.[a-zA-Z]{2,}', stripped_line):
+                    print(f"DEBUG: Line {i}: Found new filename '{stripped_line}' while looking for code start for '{current_file}'. Resetting.")
+                    current_file = stripped_line
+                    current_content = []
+                    # State remains LOOKING_FOR_CODE_START
+                continue
+
+            if state == "IN_CODE_BLOCK":
+                if stripped_line == '```':
+                    # End of code block, save the file content
+                    if current_file and current_content:
+                        files[current_file] = '\n'.join(current_content).strip()
+                        print(f"DEBUG: Saved content for {current_file} after code block.")
+                    current_file = None
+                    current_content = []
+                    state = "LOOKING_FOR_FILENAME"
+                    print(f"DEBUG: Line {i}: Found code end. State -> {state}")
+                else:
+                    current_content.append(line)
+
+        # Save any remaining content
+        if current_file and current_content:
+            files[current_file] = '\n'.join(current_content).strip()
+            print(f"DEBUG: Saved final content for {current_file}")
+
+        # Fallback if the state machine fails
+        if not files:
+            print("DEBUG: Using fallback parsing method")
+            # Look for all files with regex patterns
+            fallback_patterns = [
+                (r'README\.md.*?```([^`]+)```', 'README.md'),
+                (r'app/app\.py.*?```([^`]+)```', 'app/app.py'),
+                (r'app/requirements\.txt.*?```([^`]+)```', 'app/requirements.txt'),
+                (r'Dockerfile.*?```([^`]+)```', 'Dockerfile'),
+                (r'nginx/Dockerfile.*?```([^`]+)```', 'nginx/Dockerfile'),
+                (r'nginx/nginx\.conf.*?```([^`]+)```', 'nginx/nginx.conf'),
+                (r'prometheus/prometheus\.yml.*?```([^`]+)```', 'prometheus/prometheus.yml'),
+                (r'docker-compose\.yml.*?```([^`]+)```', 'docker-compose.yml'),
+            ]
+            
+            for pattern, filename in fallback_patterns:
+                match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+                if match:
+                    files[filename] = match.group(1).strip()
+                    print(f"Fallback found: {filename}")
+
+        if not files:
+            print("ERROR: No files were parsed from the input.")
+
+        print(f"Parsed {len(files)} files:")
+        for fname in files.keys():
+            print(f"  - {fname}")
+
+        # Write the infrastructure files
+        for filename, file_content in files.items():
+            if not filename or not file_content.strip():
+                print(f"Skipping empty file: {filename}")
+                continue
+
+            file_path = package_dir / filename.strip().replace('\\', '/')
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            try:
+                file_path.write_text(file_content, encoding='utf-8')
+                print(f"Successfully created file: {file_path} ({len(file_content)} chars)")
+            except Exception as e:
+                print(f"Error writing file {filename}: {e}")
+
+        # Create run scripts
+        run_sh_content = "#!/bin/bash\n# Run this script to start your application locally with Docker.\ndocker-compose up --build\n"
+        (package_dir / "run.sh").write_text(run_sh_content)
+        (package_dir / "run.sh").chmod(0o755)
+
+        run_bat_content = "@echo off\nREM Run this script to start your application locally with Docker.\ndocker-compose up --build\n"
+        (package_dir / "run.bat").write_text(run_bat_content)
+
+        # Create a zip archive
+        archive_path = shutil.make_archive(str(package_dir), 'zip', str(package_dir))
+        archive_filename = pathlib.Path(archive_path).name
+
+        # Clean up the original directory
+        shutil.rmtree(package_dir)
+
+        return {
+            "status": "success",
+            "message": "Deployment package created successfully.",
+            "download_url": f"/packages/{archive_filename}"
+        }
+    except Exception as e:
+        # Log the full exception for easier debugging
+        import traceback
+        print(f"ERROR: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to create package: {str(e)}")
+
 
 def _fallback_steps_for_instructions(text: str) -> list[dict]:
     import re, os

@@ -12,7 +12,7 @@ from .loki_client import LokiClient
 from .chromadb_client import ChromaDBClient
 from .github_client import GitHubClient
 from .web_search_client import WebSearchClient
-from ..models.context import EnrichedContext, ContextSource
+from models.context import EnrichedContext, ContextSource
 
 
 class ContextGatherer:
@@ -22,7 +22,7 @@ class ContextGatherer:
         self,
         loki_url: str = "http://localhost:3100",
         chromadb_host: str = "localhost",
-        chromadb_port: int = 8000,
+        chromadb_port: int = 8002,
         github_token: Optional[str] = None,
         github_repo_owner: Optional[str] = None,
         github_repo_name: Optional[str] = None,
@@ -107,6 +107,11 @@ class ContextGatherer:
         enriched_context.internal_confidence = internal_confidence
         
         # Step 2: Evaluate confidence and decide on web search
+        print(f"ContextGatherer: Evaluating web search decision...")
+        print(f"ContextGatherer: Internal confidence: {internal_confidence:.3f}")
+        print(f"ContextGatherer: Confidence threshold: {confidence_threshold}")
+        print(f"ContextGatherer: Similar incidents found: {len(enriched_context.similar_incidents)}")
+        
         should_search_web = self._should_trigger_web_search(
             internal_confidence, 
             confidence_threshold, 
@@ -117,18 +122,20 @@ class ContextGatherer:
         
         if should_search_web:
             # Step 3: Trigger web search only if confidence is low
+            print(f"ContextGatherer: Decision: Trigger web search (confidence too low)")
             try:
                 enriched_context.web_knowledge = await self._gather_web_search_context(incident_data)
                 enriched_context.sources_used.append(ContextSource.WEB_SEARCH)
                 enriched_context.web_search_reason = f"Low internal confidence ({internal_confidence:.3f} < {confidence_threshold})"
-                print(f"ContextGatherer: Triggered web search due to low confidence ({internal_confidence:.3f})")
+                print(f"ContextGatherer: Web search completed successfully")
             except Exception as e:
                 enriched_context.gathering_errors[ContextSource.WEB_SEARCH] = str(e)
                 enriched_context.web_search_reason = f"Web search failed: {e}"
+                print(f"ContextGatherer: Web search failed: {e}")
         else:
             enriched_context.web_knowledge = []
             enriched_context.web_search_reason = f"High internal confidence ({internal_confidence:.3f} >= {confidence_threshold})"
-            print(f"ContextGatherer: Skipped web search due to high confidence ({internal_confidence:.3f})")
+            print(f"ContextGatherer: Decision: Skip web search (confidence sufficient)")
         
         # Calculate gathering time
         enriched_context.gathering_time_ms = int((time.time() - start_time) * 1000)
@@ -146,48 +153,73 @@ class ContextGatherer:
     async def _gather_loki_context(self, service_name: str) -> List[Dict[str, Any]]:
         """Gather context from Loki logs."""
         try:
+            print(f"ContextGatherer: Gathering Loki context for service: {service_name}")
+            
             # Get both recent logs and error logs
+            print(f"ContextGatherer: Fetching recent logs from Loki...")
             recent_logs = await self.loki_client.get_recent_logs(service_name, hours_back=2)
+            print(f"ContextGatherer: Found {len(recent_logs)} recent log entries")
+            
+            print(f"ContextGatherer: Searching for error logs in Loki...")
             error_logs = await self.loki_client.search_error_logs(service_name, hours_back=2)
+            print(f"ContextGatherer: Found {len(error_logs)} error log entries")
             
             # Combine and deduplicate
             all_logs = recent_logs + error_logs
             unique_logs = self._deduplicate_logs(all_logs)
+            print(f"ContextGatherer: Deduplicated to {len(unique_logs)} unique log entries")
             
             return unique_logs
             
         except Exception as e:
             print(f"ContextGatherer: Error gathering Loki context: {e}")
+            print(f"ContextGatherer: Loki error type: {type(e).__name__}")
             return []
     
     async def _gather_chromadb_context(self, incident_data: Dict[str, Any]) -> tuple[List[Any], float]:
         """Gather context from ChromaDB historical incidents."""
         try:
+            print(f"ContextGatherer: Gathering ChromaDB context for incident: {incident_data.get('id', 'unknown')}")
+            print(f"ContextGatherer: Searching for similar incidents in ChromaDB...")
+            
             similar_incidents, confidence = await self.chromadb_client.find_similar_incidents(
                 incident_data, 
                 limit=5, 
                 similarity_threshold=0.7
             )
+            
+            print(f"ContextGatherer: Found {len(similar_incidents)} similar incidents with confidence {confidence:.3f}")
+            if similar_incidents:
+                for i, incident in enumerate(similar_incidents[:3]):  # Show top 3
+                    print(f"ContextGatherer:   {i+1}. {incident.incident_id} (similarity: {incident.similarity_score:.3f})")
+            
             return similar_incidents, confidence
             
         except Exception as e:
             print(f"ContextGatherer: Error gathering ChromaDB context: {e}")
+            print(f"ContextGatherer: ChromaDB error type: {type(e).__name__}")
             return [], 0.0
     
     async def _gather_github_context(self, service_name: str) -> List[Dict[str, Any]]:
         """Gather context from GitHub recent commits."""
         try:
+            print(f"ContextGatherer: Gathering GitHub context for service: {service_name}")
+            
+            print(f"ContextGatherer: Fetching recent commits from GitHub...")
             recent_commits = await self.github_client.get_recent_commits(
                 service_name, 
                 hours_back=24, 
                 max_commits=10
             )
+            print(f"ContextGatherer: Found {len(recent_commits)} recent commits")
             
             # Also get deployment history
+            print(f"ContextGatherer: Fetching deployment history from GitHub...")
             deployment_commits = await self.github_client.get_service_deployment_history(
                 service_name, 
                 days_back=7
             )
+            print(f"ContextGatherer: Found {len(deployment_commits)} deployment commits")
             
             # Combine and sort by timestamp
             all_commits = recent_commits + deployment_commits
@@ -197,20 +229,35 @@ class ContextGatherer:
                 reverse=True
             )
             
-            return sorted_commits[:15]  # Return top 15 most recent
+            result = sorted_commits[:15]  # Return top 15 most recent
+            print(f"ContextGatherer: Returning {len(result)} most recent commits")
+            
+            return result
             
         except Exception as e:
             print(f"ContextGatherer: Error gathering GitHub context: {e}")
+            print(f"ContextGatherer: GitHub error type: {type(e).__name__}")
             return []
     
     async def _gather_web_search_context(self, incident_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Gather context from web search."""
         try:
+            print(f"ContextGatherer: Gathering web search context for incident: {incident_data.get('id', 'unknown')}")
+            print(f"ContextGatherer: Searching web for incident knowledge...")
+            
             web_knowledge = await self.web_search_client.search_incident_knowledge(incident_data)
+            print(f"ContextGatherer: Found {len(web_knowledge)} web search results")
+            
+            if web_knowledge:
+                for i, result in enumerate(web_knowledge[:3]):  # Show top 3
+                    title = result.get('title', 'No title')[:50]
+                    print(f"ContextGatherer:   {i+1}. {title}...")
+            
             return web_knowledge
             
         except Exception as e:
             print(f"ContextGatherer: Error gathering web search context: {e}")
+            print(f"ContextGatherer: Web search error type: {type(e).__name__}")
             return []
     
     def _should_trigger_web_search(

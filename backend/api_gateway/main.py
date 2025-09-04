@@ -1,5 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+import os
+import json
+import requests
 import httpx
 import asyncio
 from typing import Dict, Any, List
@@ -69,13 +73,19 @@ async def health_check():
 
 @app.get("/api/incidents")
 async def get_incidents():
-    """Get incidents from planner agent"""
-    # This will be implemented when you add incident storage
-    return {
-        "incidents": [],
-        "message": "Incident storage not yet implemented",
-        "status": "success"
-    }
+    """Get incidents from MongoDB"""
+    try:
+        incidents = list(collection.find({}))
+        # Convert ObjectId to string for JSON serialization
+        for incident in incidents:
+            if '_id' in incident:
+                incident['_id'] = str(incident['_id'])
+        return {
+            "incidents": incidents,
+            "status": "success"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch incidents: {str(e)}")
 
 @app.post("/api/query")
 async def submit_query(query: Dict[str, Any]):
@@ -98,8 +108,22 @@ async def get_stats():
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{AGENT_ENDPOINTS['learner']}/stats")
             return response.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Stats retrieval failed: {str(e)}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=f"Error forwarding request to architect: {e}")
+
+@app.post("/api/infrastructure/deploy")
+async def deploy_infrastructure(request: DeployRequest):
+    """Forwards a request to the Actor agent to create a deployment package."""
+    actor_url = "http://localhost:8003/api/package/create"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(actor_url, json={"infrastructure_code": request.infrastructure_code})
+            response.raise_for_status()  # Raise an exception for bad status codes
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Error from actor agent: {e.response.text}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=f"Error forwarding request to actor: {e}")
 
 @app.get("/api/agents")
 async def get_agents():
@@ -128,6 +152,7 @@ async def get_agents():
             }
         ]
     }
+
 
 RABBITMQ_URL = "amqp://guest:guest@localhost:5672/"
 
@@ -173,6 +198,7 @@ async def forward_plans_to_approved():
     except Exception as e:
         print("🔥 Forwarding error:", e)
         raise HTTPException(status_code=500, detail=f"Failed to forward plans: {str(e)}")
+
 
 
 if __name__ == "__main__":

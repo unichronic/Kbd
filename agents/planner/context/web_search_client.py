@@ -8,7 +8,7 @@ public knowledge about incidents, error messages, and solutions.
 import asyncio
 from typing import Any, Dict, List, Optional
 from tavily import TavilyClient
-from ..models.context import ContextSource
+from models.context import ContextSource
 
 
 class WebSearchClient:

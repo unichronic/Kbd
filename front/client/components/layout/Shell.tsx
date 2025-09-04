@@ -27,7 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { Box, LayoutDashboard, AlertTriangle, Plug, Settings, CheckCircle2, XCircle } from "lucide-react";
+import { Box, LayoutDashboard, AlertTriangle, Cloud, Plug, Settings, CheckCircle2, XCircle } from "lucide-react";
 import { useSystemStatus } from "@/context/SystemStatusContext";
 
 function Logo() {
@@ -77,6 +77,14 @@ export function Shell({ children }: { children: ReactNode }) {
                     <NavLink to="/incidents">
                       <AlertTriangle />
                       <span>Incidents</span>
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild tooltip="Infrastructure">
+                    <NavLink to="/infrastructure">
+                      <Cloud />
+                      <span>Infrastructure</span>
                     </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
