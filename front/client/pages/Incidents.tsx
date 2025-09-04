@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -31,45 +31,6 @@ type Incident = {
   updated: string;
   hypothesis: string;
 };
-
-const INCIDENTS: Incident[] = [
-  {
-    id: "INC-1024",
-    title: "Spike in 5xx responses on api-gateway",
-    service: "api-gateway",
-    severity: "critical",
-    status: "active",
-    updated: "2m ago",
-    hypothesis: "Possible upstream timeout in user-service",
-  },
-  {
-    id: "INC-1023",
-    title: "Elevated pod restarts in kube-system",
-    service: "kubelet",
-    severity: "warning",
-    status: "acknowledged",
-    updated: "14m ago",
-    hypothesis: "Node drain during autoscaling event",
-  },
-  {
-    id: "INC-1022",
-    title: "Latency regression on payments-service",
-    service: "payments",
-    severity: "info",
-    status: "resolved",
-    updated: "1h ago",
-    hypothesis: "Recent deploy increased cold-starts",
-  },
-  {
-    id: "INC-1021",
-    title: "Error rates increased on auth-service",
-    service: "auth",
-    severity: "warning",
-    status: "active",
-    updated: "2h ago",
-    hypothesis: "Redis cache saturation causing timeouts",
-  },
-];
 
 function SeverityBadge({ s }: { s: Severity }) {
   if (s === "critical")
@@ -141,15 +102,78 @@ function generatePlan(i: Incident) {
 
 export default function Incidents() {
   const { apiClient } = useApi();
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   const [tab, setTab] = useState<"active" | "resolved" | "all">("active");
   const [sev, setSev] = useState<"all" | Severity>("all");
   const [q, setQ] = useState("");
-  const [selected, setSelected] = useState<Incident | null>(INCIDENTS[0]);
+  const [selected, setSelected] = useState<Incident | null>(null);
   const [isAcknowledging, setIsAcknowledging] = useState(false);
   const plan = useMemo(
     () => (selected ? generatePlan(selected) : []),
     [selected],
   );
+
+  useEffect(() => {
+    const fetchIncidents = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch('http://localhost:8005/api/incidents');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+
+        const mapSeverity = (riskLevel: string): Severity => {
+          switch (riskLevel?.toLowerCase()) {
+            case 'high': return 'critical';
+            case 'medium': return 'warning';
+            case 'low': return 'info';
+            default: return 'info';
+          }
+        };
+
+        const mapStatus = (status: string): Status => {
+          switch (status?.toLowerCase()) {
+            case 'proposed':
+            case 'active':
+              return 'active';
+            case 'approved':
+            case 'acknowledged':
+              return 'acknowledged';
+            case 'completed':
+            case 'resolved':
+              return 'resolved';
+            default: return 'active';
+          }
+        };
+
+        const formattedIncidents: Incident[] = data.incidents.map((inc: any) => ({
+          id: inc.incident_id || inc._id,
+          title: inc.title,
+          service: inc.source || 'unknown',
+          severity: mapSeverity(inc.risk_level),
+          status: mapStatus(inc.status),
+          updated: new Date(inc.updated_at).toLocaleString(),
+          hypothesis: inc.description,
+        }));
+
+        setIncidents(formattedIncidents);
+        if (formattedIncidents.length > 0) {
+            setSelected(formattedIncidents[0]);
+        }
+
+      } catch (e: any) {
+        setError(e.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchIncidents();
+  }, []);
 
   const handleAcknowledge = async () => {
     try {
@@ -166,7 +190,7 @@ export default function Incidents() {
   };
 
   const filtered = useMemo(() => {
-    return INCIDENTS.filter(
+    return incidents.filter(
       (i) =>
         (tab === "all" ||
           (tab === "resolved"
@@ -195,85 +219,91 @@ export default function Incidents() {
       <div className="grid grid-cols-12 gap-6">
         {/* Left column: list & filters */}
         <Card className="col-span-12 lg:col-span-6 xl:col-span-7">
-          <CardHeader>
-            <CardTitle className="text-lg">Browse</CardTitle>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
-                <TabsList>
-                  <TabsTrigger value="active">Active</TabsTrigger>
-                  <TabsTrigger value="resolved">Resolved</TabsTrigger>
-                  <TabsTrigger value="all">All</TabsTrigger>
-                </TabsList>
-              </Tabs>
-              <ToggleGroup
-                type="single"
-                value={sev}
-                onValueChange={(v) => v && setSev(v as any)}
-              >
-                <ToggleGroupItem value="all">All Severities</ToggleGroupItem>
-                <ToggleGroupItem value="critical">Critical</ToggleGroupItem>
-                <ToggleGroupItem value="warning">Warning</ToggleGroupItem>
-                <ToggleGroupItem value="info">Info</ToggleGroupItem>
-              </ToggleGroup>
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  placeholder="Search by ID, title, or service"
-                  className="pl-9"
-                />
-              </div>
-              <Button variant="secondary">Export</Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <ScrollArea className="h-[620px] pr-4">
-              <ul className="space-y-3">
-                {filtered.map((i) => (
-                  <li key={i.id}>
-                    <button
-                      onClick={() => setSelected(i)}
-                      className={`w-full rounded-lg border p-4 text-left transition-colors hover:bg-accent ${selected?.id === i.id ? "ring-2 ring-ring" : ""}`}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium truncate">
-                              {i.title}
-                            </span>
-                            <SeverityBadge s={i.severity} />
-                            <StatusPill st={i.status} />
-                            <span className="rounded-md bg-muted px-2 py-0.5 text-xs">
-                              {i.service}
-                            </span>
+          {loading && <CardContent><p className="p-6 text-center">Loading incidents...</p></CardContent>}
+          {error && <CardContent><p className="p-6 text-center text-destructive">Error: {error}</p></CardContent>}
+          {!loading && !error && (
+            <>
+              <CardHeader>
+                <CardTitle className="text-lg">Browse</CardTitle>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
+                    <TabsList>
+                      <TabsTrigger value="active">Active</TabsTrigger>
+                      <TabsTrigger value="resolved">Resolved</TabsTrigger>
+                      <TabsTrigger value="all">All</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <ToggleGroup
+                    type="single"
+                    value={sev}
+                    onValueChange={(v) => v && setSev(v as any)}
+                  >
+                    <ToggleGroupItem value="all">All Severities</ToggleGroupItem>
+                    <ToggleGroupItem value="critical">Critical</ToggleGroupItem>
+                    <ToggleGroupItem value="warning">Warning</ToggleGroupItem>
+                    <ToggleGroupItem value="info">Info</ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      value={q}
+                      onChange={(e) => setQ(e.target.value)}
+                      placeholder="Search by ID, title, or service"
+                      className="pl-9"
+                    />
+                  </div>
+                  <Button variant="secondary">Export</Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[620px] pr-4">
+                  <ul className="space-y-3">
+                    {filtered.map((i) => (
+                      <li key={i.id}>
+                        <button
+                          onClick={() => setSelected(i)}
+                          className={`w-full rounded-lg border p-4 text-left transition-colors hover:bg-accent ${selected?.id === i.id ? "ring-2 ring-ring" : ""}`}
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium truncate">
+                                  {i.title}
+                                </span>
+                                <SeverityBadge s={i.severity} />
+                                <StatusPill st={i.status} />
+                                <span className="rounded-md bg-muted px-2 py-0.5 text-xs">
+                                  {i.service}
+                                </span>
+                              </div>
+                              <p className="mt-1 line-clamp-1 text-sm text-muted-foreground">
+                                AI hypothesis: {i.hypothesis}
+                              </p>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <div className="text-sm text-muted-foreground">
+                                {i.updated}
+                              </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {i.id}
+                              </div>
+                            </div>
                           </div>
-                          <p className="mt-1 line-clamp-1 text-sm text-muted-foreground">
-                            AI hypothesis: {i.hypothesis}
-                          </p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <div className="text-sm text-muted-foreground">
-                            {i.updated}
-                          </div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {i.id}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-                {filtered.length === 0 && (
-                  <li className="rounded-lg border p-6 text-center text-muted-foreground">
-                    No incidents match your filters.
-                  </li>
-                )}
-              </ul>
-            </ScrollArea>
-          </CardContent>
+                        </button>
+                      </li>
+                    ))}
+                    {filtered.length === 0 && (
+                      <li className="rounded-lg border p-6 text-center text-muted-foreground">
+                        No incidents match your filters.
+                      </li>
+                    )}
+                  </ul>
+                </ScrollArea>
+              </CardContent>
+            </>
+          )}
         </Card>
 
         {/* Right column: details */}
@@ -432,4 +462,5 @@ export default function Incidents() {
       </div>
     </div>
   );
-}
+};
+

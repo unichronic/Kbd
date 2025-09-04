@@ -7,10 +7,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
-import NotFound from "./pages/NotFound";
 import Incidents from "./pages/Incidents";
+import Infrastructure from "./pages/Infrastructure";
 import Integrations from "./pages/Integrations";
 import Settings from "./pages/Settings";
+import NotFound from "./pages/NotFound";
 import { Shell } from "@/components/layout/Shell";
 import { SystemStatusProvider } from "@/context/SystemStatusContext";
 import { ApiProvider } from "@/context/ApiContext";
@@ -29,6 +30,7 @@ const App = () => (
               <Routes>
                 <Route path="/" element={<Index />} />
                 <Route path="/incidents" element={<Incidents />} />
+                <Route path="/infrastructure" element={<Infrastructure />} />
                 <Route path="/integrations" element={<Integrations />} />
                 <Route path="/settings" element={<Settings />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
