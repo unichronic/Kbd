@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -97,96 +97,80 @@ export default function Index() {
     refreshHealth 
   } = useApi();
 
+  // Start with no incidents
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [incidentsLoading, setIncidentsLoading] = useState(false);
-  const [aiMode, setAiMode] = useState<"manual" | "low" | "medium" | "high">("manual");
 
-  // Mock events for MTTR calculation (replace with real data later)
-  const events = useMemo<IncidentEvent[]>(() => {
-    const now = Date.now();
-    return [
-      {
-        type: "incidents.new",
-        incidentId: "INC-1024",
-        ts: now - 45 * 60 * 1000,
-      },
-      {
-        type: "incidents.resolved",
-        incidentId: "INC-1024",
-        ts: now - 15 * 60 * 1000,
-      },
-      {
-        type: "incidents.new",
-        incidentId: "INC-1023",
-        ts: now - 3 * 60 * 60 * 1000,
-      },
-      {
-        type: "incidents.resolved",
-        incidentId: "INC-1023",
-        ts: now - 2 * 60 * 60 * 1000 - 20 * 60 * 1000,
-      },
-    ];
+  // For logs animation
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logIndex, setLogIndex] = useState<number>(-1);
+  const logTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const exampleLogs = [
+    "Fetching latest incidents from API...",
+    "Incident INC-1024: Spike in 5xx responses detected.",
+    "Incident INC-1023: Elevated pod restarts observed.",
+    "AI hypothesis: Possible upstream timeout in user-service.",
+    "Node drain during autoscaling event.",
+    "Incidents loaded successfully.",
+  ];
+
+  // Clean up any running log animation
+  useEffect(() => {
+    return () => {
+      if (logTimeoutRef.current) clearTimeout(logTimeoutRef.current);
+    };
   }, []);
 
-  const { avgMs: mttrMs, durations: mttrDurations } = useMemo(
-    () => computeMttr(events),
-    [events],
-  );
-  const mttrDisplay = formatDuration(mttrMs);
-  const mttrSeries = useMemo(() => {
-    const data = mttrDurations
-      .slice(-12)
-      .map((d, i) => ({ x: i, mttrMin: Math.max(0, Math.round(d / 60000)) }));
-    return data.length ? data : [{ x: 0, mttrMin: 0 }];
-  }, [mttrDurations]);
-
-  const learnedCount = useMemo(() => {
-    const ids = new Set(
-      events
-        .filter((e) => e.type === "learner.vectorized")
-        .map((e) => e.incidentId),
-    );
-    return ids.size;
-  }, [events]);
-
-  // Load incidents from API
+  // Modified refresh handler
   const loadIncidents = async () => {
-    try {
-      setIncidentsLoading(true);
-      const incidentsData = await apiClient.getIncidents();
-      setIncidents(incidentsData);
-    } catch (err) {
-      console.error('Failed to load incidents:', err);
-      // Fallback to mock data if API fails
-      setIncidents([
-        {
-          id: "INC-1024",
-          title: "Spike in 5xx responses on api-gateway",
-          severity: "critical",
-          status: "active",
-          hypothesis: "Possible upstream timeout in user-service",
-          occurredAt: "2m ago",
-          service: "api-gateway"
-        },
-        {
-          id: "INC-1023",
-          title: "Elevated pod restarts in kube-system",
-          severity: "warning",
-          status: "acknowledged",
-          hypothesis: "Node drain during autoscaling event",
-          occurredAt: "14m ago",
-          service: "kubelet"
-        },
-      ]);
-    } finally {
-      setIncidentsLoading(false);
+    setIncidentsLoading(true);
+    setIncidents([]); // Clear previous incidents
+
+    const incidentList = [
+      {
+        id: "INC-1024",
+        title: "Spike in 5xx responses on api-gateway",
+        severity: "critical" as "critical",
+        status: "active" as "active",
+        hypothesis: "Possible upstream timeout in user-service",
+        occurredAt: "2m ago",
+        service: "api-gateway"
+      },
+      {
+        id: "INC-1023",
+        title: "Elevated pod restarts in kube-system",
+        severity: "warning" as "warning",
+        status: "acknowledged" as "acknowledged",
+        hypothesis: "Node drain during autoscaling event",
+        occurredAt: "14m ago",
+        service: "kubelet"
+      },
+      {
+        id: "INC-1022",
+        title: "High memory usage in payments-service",
+        severity: "warning" as "warning",
+        status: "active" as "active",
+        hypothesis: "Memory leak suspected in payments-service",
+        occurredAt: "22m ago",
+        service: "payments-service"
+      }
+    ];
+
+    for (let i = 0; i < incidentList.length; i++) {
+      await new Promise(res => setTimeout(res, 800)); // 800ms delay
+      setIncidents(prev => [...prev, incidentList[i]]);
     }
+
+    setIncidentsLoading(false);
+    setLogs([]);
+    setLogIndex(-1);
   };
 
-  // Load initial data
-  useEffect(() => {
-    loadIncidents();
-  }, []);
+  // Remove this effect so incidents don't load on mount
+  // useEffect(() => {
+  //   loadIncidents();
+  // }, []);
 
   // Mock metrics (replace with real data later)
   const cpu = 62;
@@ -219,6 +203,18 @@ export default function Index() {
     setStatus(systemLevel);
   }, [setStatus, systemLevel]);
 
+  const [aiMode, setAiMode] = useState<"manual" | "low" | "medium" | "high">("manual");
+
+  // Compute MTTR metrics (mock data for now)
+  const mttrData = computeMttr([]);
+  const mttrDisplay = formatDuration(mttrData.avgMs);
+  const mttrSeries = Array.from({ length: 10 }, (_, i) => ({
+    x: i,
+    mttrMin: Math.round(mttrData.durations[i] ? mttrData.durations[i] / 60000 : 0),
+  }));
+  // Mock learned incidents count
+  const learnedCount = 42;
+
   return (
     <div className="mx-auto w-full max-w-[1600px]">
       {/* Connection Status Alert */}
@@ -232,7 +228,7 @@ export default function Index() {
       )}
 
       {!isApiConnected && (
-        <Alert className="mb-6" variant="warning">
+        <Alert className="mb-6" variant="default">
           <Wifi className="h-4 w-4" />
           <AlertDescription>
             Backend connection lost. Attempting to reconnect...
@@ -253,7 +249,7 @@ export default function Index() {
               size="sm" 
               className="gap-2"
               onClick={loadIncidents}
-              disabled={incidentsLoading}
+              disabled={incidentsLoading || logIndex >= 0}
             >
               <RefreshCcw className={`h-4 w-4 ${incidentsLoading ? 'animate-spin' : ''}`} /> 
               Refresh
@@ -262,50 +258,61 @@ export default function Index() {
           <CardContent className="pt-2">
             <ScrollArea className="h-[420px] pr-4">
               <ul className="space-y-3">
-                {incidents.map((inc) => (
-                  <li
-                    key={inc.id}
-                    className="rounded-lg border p-4 hover:bg-accent"
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate font-medium">
-                            {inc.title}
+                {/* Show logs if loading */}
+                {logIndex >= 0 ? (
+                  logs.map((log, i) => (
+                    <li key={i} className="rounded-lg border p-4 text-muted-foreground">
+                      {log}
+                    </li>
+                  ))
+                ) : (
+                  <>
+                    {incidents.map((inc) => (
+                      <li
+                        key={inc.id}
+                        className="rounded-lg border p-4 hover:bg-accent"
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate font-medium">
+                                {inc.title}
+                              </span>
+                              {inc.severity === "critical" && (
+                                <Badge className="bg-destructive text-destructive-foreground">
+                                  Critical
+                                </Badge>
+                              )}
+                              {inc.severity === "warning" && (
+                                <Badge className="bg-warning text-black">
+                                  Warning
+                                </Badge>
+                              )}
+                              {inc.severity === "info" && (
+                                <Badge variant="secondary">Info</Badge>
+                              )}
+                            </div>
+                            <p className="mt-1 text-sm text-muted-foreground truncate">
+                              AI hypothesis: {inc.hypothesis}
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-sm text-muted-foreground">
+                            {inc.occurredAt}
                           </span>
-                          {inc.severity === "critical" && (
-                            <Badge className="bg-destructive text-destructive-foreground">
-                              Critical
-                            </Badge>
-                          )}
-                          {inc.severity === "warning" && (
-                            <Badge className="bg-warning text-black">
-                              Warning
-                            </Badge>
-                          )}
-                          {inc.severity === "info" && (
-                            <Badge variant="secondary">Info</Badge>
-                          )}
                         </div>
-                        <p className="mt-1 text-sm text-muted-foreground truncate">
-                          AI hypothesis: {inc.hypothesis}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-sm text-muted-foreground">
-                        {inc.occurredAt}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-                {incidents.length === 0 && !incidentsLoading && (
-                  <li className="rounded-lg border p-6 text-center text-muted-foreground">
-                    No incidents found
-                  </li>
-                )}
-                {incidentsLoading && (
-                  <li className="rounded-lg border p-6 text-center text-muted-foreground">
-                    Loading incidents...
-                  </li>
+                      </li>
+                    ))}
+                    {incidents.length === 0 && !incidentsLoading && (
+                      <li className="rounded-lg border p-6 text-center text-muted-foreground">
+                        No incidents found
+                      </li>
+                    )}
+                    {incidentsLoading && (
+                      <li className="rounded-lg border p-6 text-center text-muted-foreground">
+                        Loading incidents...
+                      </li>
+                    )}
+                  </>
                 )}
               </ul>
             </ScrollArea>

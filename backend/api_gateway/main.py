@@ -6,45 +6,10 @@ import json
 import requests
 import httpx
 import asyncio
-from typing import List, Dict, Any
-from pydantic import BaseModel
-import sys
-from pymongo import MongoClient
-from bson import ObjectId
-
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'agents', 'architect'))
-
-# Try to import architect functions, fallback if not available
-try:
-    from architect_core import generate_clarifying_questions, generate_infra_plan
-    ARCHITECT_AVAILABLE = True
-except ImportError as e:
-    print(f"[!] Warning: Could not import architect_core: {e}")
-    ARCHITECT_AVAILABLE = False
-
-# MongoDB setup
-MONGO_URI = os.environ.get("MONGO_URI")
-client = MongoClient(MONGO_URI)
-db = client["incident_db"]
-collection = db["plans"]
-
-# Helper to convert ObjectId to string
-class JSONEncoder(json.JSONEncoder):
-    def default(self, o):
-        if isinstance(o, ObjectId):
-            return str(o)
-        return json.JSONEncoder.default(self, o)
-
-# Request models
-class InfraRequest(BaseModel):
-    prompt: str
-
-class InfraAnswers(BaseModel):
-    original_prompt: str
-    answers: List[str]
-
-class DeployRequest(BaseModel):
-    infrastructure_code: str
+from typing import Dict, Any, List
+import uvicorn
+import pika
+import json
 
 app = FastAPI(
     title="KubeMinder API Gateway",
@@ -188,151 +153,53 @@ async def get_agents():
         ]
     }
 
-@app.post("/api/infrastructure/questions")
-async def generate_questions(request: InfraRequest):
-    """Generate clarifying questions for infrastructure setup"""
-    if not ARCHITECT_AVAILABLE:
-        # Fallback questions when Gemini is not available
-        return {
-            "status": "success",
-            "source": "fallback",
-            "questions": [
-                "What cloud provider do you prefer (AWS, GCP, Azure)?",
-                "Do you need a database? If yes, which type (PostgreSQL, MySQL, MongoDB)?",
-                "Do you need auto-scaling and load balancing?",
-                "What CI/CD platform do you prefer (GitHub Actions, Jenkins, GitLab CI)?"
-            ],
-            "original_prompt": request.prompt
-        }
-    
+
+RABBITMQ_URL = "amqp://guest:guest@localhost:5672/"
+
+@app.post("/api/plans/forward-to-approved")
+async def forward_plans_to_approved():
     try:
-        questions = generate_clarifying_questions(request.prompt)
-        return {
-            "status": "success",
-            "source": "gemini",
-            "questions": questions,
-            "original_prompt": request.prompt
-        }
+        connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
+        channel = connection.channel()
+
+        forwarded_count = 0
+        while True:
+            method, properties, body = channel.basic_get(queue="q.plans.proposed", auto_ack=False)
+            if not method:
+                break
+
+            try:
+                plan = json.loads(body)
+            except Exception as e:
+                channel.basic_ack(delivery_tag=method.delivery_tag)
+                print("❌ Failed to decode plan:", body, e)
+                continue
+
+            plan["status"] = "approved"
+            plan["approved_by"] = "gateway"
+
+            # ✅ Properly aligned with plan update
+            channel.basic_publish(
+                exchange="",   # default direct exchange
+                routing_key="q.plans.approved",  # forward directly to the approved queue
+                body=json.dumps(plan),
+                properties=pika.BasicProperties(
+                    content_type="application/json",
+                    delivery_mode=2
+                )
+            )
+
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            forwarded_count += 1
+
+        connection.close()
+        return {"status": "success", "forwarded_count": forwarded_count}
+
     except Exception as e:
-        print(f"[!] Error generating questions: {e}")
-        # Fallback questions on error
-        return {
-            "status": "success",
-            "source": "fallback",
-            "questions": [
-                "What cloud provider do you prefer (AWS, GCP, Azure)?",
-                "Do you need a database? If yes, which type (PostgreSQL, MySQL, MongoDB)?",
-                "Do you need auto-scaling and load balancing?",
-                "What CI/CD platform do you prefer (GitHub Actions, Jenkins, GitLab CI)?"
-            ],
-            "original_prompt": request.prompt
-        }
+        print("🔥 Forwarding error:", e)
+        raise HTTPException(status_code=500, detail=f"Failed to forward plans: {str(e)}")
 
-@app.post("/api/infrastructure/generate")
-async def generate_infrastructure(request: InfraAnswers):
-    """Generate complete infrastructure setup from answers"""
-    if not ARCHITECT_AVAILABLE:
-        # Fallback infrastructure template
-        return {
-            "status": "success",
-            "source": "fallback",
-            "infrastructure": f"""## Dockerfile
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
-```
 
-## terraform/main.tf
-```hcl
-variable "environment" {{
-  description = "Environment name"
-  type        = string
-  default     = "staging"
-}}
-
-resource "aws_instance" "web" {{
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = "t2.micro"
-  
-  tags = {{
-    Name        = "${{var.environment}}-web-server"
-    Environment = var.environment
-  }}
-}}
-
-output "instance_ip" {{
-  value = aws_instance.web.public_ip
-}}
-```
-
-## docker-compose.yml
-```yaml
-version: '3.8'
-services:
-  app:
-    build: .
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=staging
-  
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: myapp
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-volumes:
-  postgres_data:
-""",
-            "original_prompt": request.original_prompt,
-            "answers": request.answers
-        }
-    
-    try:
-        infra_plan = generate_infra_plan(request.original_prompt, request.answers)
-        return {
-            "status": "success",
-            "source": "gemini",
-            "infrastructure": infra_plan,
-            "original_prompt": request.original_prompt,
-            "answers": request.answers
-        }
-    except Exception as e:
-        print(f"[!] Error generating infrastructure: {e}")
-        # Return fallback template on error
-        return {
-            "status": "success", 
-            "source": "fallback",
-            "infrastructure": f"""## Dockerfile
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
-## Error
-Failed to generate infrastructure with Gemini. Please check:
-1. GEMINI_API_KEY is set correctly
-2. Network connectivity is available
-3. Gemini API quota is not exceeded
-
-Error: {str(e)}""",
-            "original_prompt": request.original_prompt,
-            "answers": request.answers
-        }
 
 if __name__ == "__main__":
     print("🚀 Starting KubeMinder API Gateway on port 8005...")

@@ -65,3 +65,37 @@ async def compose(args: list[str], cwd: str | None = None, env: dict | None = No
 
 async def kubectl(args: list[str], cwd: str | None = None, env: dict | None = None):
     return await shell_run(cmd="kubectl", args=args, cwd=cwd, env=env)
+    import subprocess, tempfile, os, json, httpx, pathlib
+
+    repo_dir = tempfile.mkdtemp()
+    subprocess.run(["git", "clone", repo_url, repo_dir], check=True)
+
+    target_file = pathlib.Path(repo_dir) / file_path
+    old_code = target_file.read_text(encoding="utf-8")
+
+    # Call LLM to propose a fix
+    from compile_plan import _openai_compatible_chat
+    prompt = f"Fix the following code error:\n\nError:\n{error}\n\nFile ({file_path}):\n{old_code}"
+    new_code = _openai_compatible_chat(
+        [{"role": "user", "content": prompt}],
+        model=os.getenv("LLM_MODEL", "meta-llama/llama-3.3-8b-instruct:free")
+    )
+
+    target_file.write_text(new_code, encoding="utf-8")
+
+    subprocess.run(["git", "checkout", "-b", branch], cwd=repo_dir, check=True)
+    subprocess.run(["git", "add", file_path], cwd=repo_dir, check=True)
+    subprocess.run(["git", "commit", "-m", commit_msg], cwd=repo_dir, check=True)
+    subprocess.run(["git", "push", "origin", branch], cwd=repo_dir, check=True)
+
+    # Raise PR via GitHub API
+    token = os.getenv("GITHUB_TOKEN")
+    repo_name = repo_url.split(":")[-1].replace(".git", "")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    async with httpx.AsyncClient() as client:
+        pr = await client.post(
+            f"https://api.github.com/repos/{repo_name}/pulls",
+            headers=headers,
+            json={"title": pr_title, "head": branch, "base": "main", "body": "Auto-generated PR"}
+        )
+        return {"ok": pr.status_code < 300, "status": pr.status_code, "response": pr.text}
